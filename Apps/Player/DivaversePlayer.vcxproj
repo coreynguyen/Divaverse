@@ -1,0 +1,120 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64"><Configuration>Debug</Configuration><Platform>x64</Platform></ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64"><Configuration>Release</Configuration><Platform>x64</Platform></ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>17.0</VCProjectVersion>
+    <ProjectGuid>{6E1D2A4B-9C35-4F7A-B0D2-5A1C8E3F7D10}</ProjectGuid>
+    <Keyword>Win32Proj</Keyword>
+    <RootNamespace>DivaversePlayer</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <PlatformToolset>v143</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)'=='Debug'" Label="Configuration"><UseDebugLibraries>true</UseDebugLibraries></PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)'=='Release'" Label="Configuration"><UseDebugLibraries>false</UseDebugLibraries><WholeProgramOptimization>true</WholeProgramOptimization></PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <PropertyGroup>
+    <OutDir>$(SolutionDir)Build\$(Configuration)\</OutDir>
+    <IntDir>$(SolutionDir)Build\obj\$(ProjectName)\$(Configuration)\</IntDir>
+    <TargetName>Divaverse</TargetName>
+    <GenerateManifest>false</GenerateManifest><!-- RT_MANIFEST comes from res\Player.rc -->
+  </PropertyGroup>
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <WarningLevel>Level4</WarningLevel>
+      <SDLCheck>true</SDLCheck>
+      <ConformanceMode>true</ConformanceMode>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <!-- sources are UTF-8 without BOM; without this MSVC reads them in the ANSI code page and mangles UI strings -->
+      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <PreprocessorDefinitions>UNICODE;_UNICODE;WIN32_LEAN_AND_MEAN;NOMINMAX;_WIN32_WINNT=0x0A00;WINVER=0x0A00;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <!-- 4244/4267: integer narrowing in the bit/EBML readers; 4456-4458: shadowing inside MKV_FOREACH -->
+      <DisableSpecificWarnings>4244;4267;4456;4457;4458;%(DisableSpecificWarnings)</DisableSpecificWarnings>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <!-- Windows system libraries only. No third-party .lib / .dll. -->
+      <AdditionalDependencies>windowscodecs.lib;mfplat.lib;mfreadwrite.lib;mfuuid.lib;d2d1.lib;dwrite.lib;d3d11.lib;dxgi.lib;dcomp.lib;d3dcompiler.lib;shell32.lib;comdlg32.lib;gdi32.lib;user32.lib;ole32.lib;advapi32.lib;uuid.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+    <PostBuildEvent>
+      <Command>if exist "$(SolutionDir)TestAssets\Divas" xcopy /y /d /q /e /i "$(SolutionDir)TestAssets\Divas" "$(OutDir)Divas" &gt;nul</Command>
+      <Message>Copying the reference clips into Divas\</Message>
+    </PostBuildEvent>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)'=='Debug'">
+    <ClCompile><Optimization>Disabled</Optimization><RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary><PreprocessorDefinitions>_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions></ClCompile>
+    <Link><GenerateDebugInformation>true</GenerateDebugInformation></Link>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)'=='Release'">
+    <ClCompile>
+      <Optimization>MaxSpeed</Optimization><FunctionLevelLinking>true</FunctionLevelLinking><IntrinsicFunctions>true</IntrinsicFunctions>
+      <RuntimeLibrary>MultiThreaded</RuntimeLibrary><!-- static CRT: no VC++ redistributable needed -->
+      <PreprocessorDefinitions>NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+    <Link><EnableCOMDATFolding>true</EnableCOMDATFolding><OptimizeReferences>true</OptimizeReferences><GenerateDebugInformation>true</GenerateDebugInformation></Link>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="src\App.cpp" />
+    <ClCompile Include="src\Audio.cpp" />
+    <ClCompile Include="src\Clip.cpp" />
+    <ClCompile Include="src\Common.cpp" />
+    <ClCompile Include="src\Flyout.cpp" />
+    <ClCompile Include="src\Gfx.cpp" />
+    <ClCompile Include="src\Image.cpp" />
+    <ClCompile Include="src\Json.cpp" />
+    <ClCompile Include="src\Library.cpp" />
+    <ClCompile Include="src\Meta.cpp" />
+    <ClCompile Include="src\MfDecoder.cpp" />
+    <ClCompile Include="src\MkvDemux.cpp" />
+    <ClCompile Include="src\Music.cpp" />
+    <ClCompile Include="src\ProcIcon.cpp" />
+    <ClCompile Include="src\Renderer.cpp" />
+    <ClCompile Include="src\Sfx.cpp" />
+    <ClCompile Include="src\Synth.cpp" />
+    <ClCompile Include="src\UserData.cpp" />
+    <ClCompile Include="src\WetRash.cpp" />
+    <ClCompile Include="src\Wheel.cpp" />
+    <ClCompile Include="src\Ui.cpp" />
+    <ClCompile Include="src\VideoSource.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="src\App.h" />
+    <ClInclude Include="src\Audio.h" />
+    <ClInclude Include="src\Clip.h" />
+    <ClInclude Include="src\Common.h" />
+    <ClInclude Include="src\Gfx.h" />
+    <ClInclude Include="src\Image.h" />
+    <ClInclude Include="src\Json.h" />
+    <ClInclude Include="src\Library.h" />
+    <ClInclude Include="src\Meta.h" />
+    <ClInclude Include="src\MfDecoder.h" />
+    <ClInclude Include="src\MkvDemux.h" />
+    <ClInclude Include="src\MkvIoWin.h" />
+    <ClInclude Include="src\Music.h" />
+    <ClInclude Include="src\ProcIcon.h" />
+    <ClInclude Include="src\Renderer.h" />
+    <ClInclude Include="src\Shaders.h" />
+    <ClInclude Include="src\Sfx.h" />
+    <ClInclude Include="src\Synth.h" />
+    <ClInclude Include="src\UserData.h" />
+    <ClInclude Include="src\WetRashData.h" />
+    <ClInclude Include="src\VideoSource.h" />
+    <ClInclude Include="src\resource.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="res\Player.rc" />
+    <None Include="res\Player.manifest" />
+    <Image Include="res\app.ico" />
+    <Image Include="res\app_paused.ico" />
+    <Image Include="res\app_edit.ico" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>

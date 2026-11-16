@@ -1,0 +1,31 @@
+{
+  "id": "dance_01",
+  "file": "dance_01.mkv",
+  "type": "dance",
+  "layout": "packed",
+  "codec": "h264",
+  "width": 480,
+  "height": 992,
+  "fps": "24/1",
+  "frames": 221,
+  "rgb_track": 0,
+  "alpha_track": 0,
+  "rgb_rect": [
+    0,
+    0,
+    480,
+    992
+  ],
+  "alpha_rect": [
+    0,
+    992,
+    480,
+    992
+  ],
+  "alpha_encoding": "luma_bt709_limited",
+  "alpha_premultiplied": false,
+  "ground_y": 0.9597,
+  "loop": "seamless_baked_crossfade_12",
+  "audio_enabled": false,
+  "sha256": "452704e3424ba8b6de5f9e366a32e011aa78e36c4cfe39e99daa5c6781548350"
+}

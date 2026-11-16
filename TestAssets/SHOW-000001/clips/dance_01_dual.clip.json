@@ -1,0 +1,31 @@
+{
+  "id": "dance_01_dual",
+  "file": "dance_01_dual.mkv",
+  "type": "dance",
+  "layout": "dual",
+  "codec": "h264",
+  "width": 480,
+  "height": 992,
+  "fps": "24/1",
+  "frames": 221,
+  "rgb_track": 0,
+  "alpha_track": 1,
+  "rgb_rect": [
+    0,
+    0,
+    480,
+    992
+  ],
+  "alpha_rect": [
+    0,
+    0,
+    480,
+    992
+  ],
+  "alpha_encoding": "luma_bt709_limited",
+  "alpha_premultiplied": false,
+  "ground_y": 0.9597,
+  "loop": "seamless_baked_crossfade_12",
+  "audio_enabled": false,
+  "sha256": "0c6ee644f37033ec707c68ff2d5cecb0e16e212431408ae75bb653afc783c913"
+}

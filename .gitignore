@@ -1,0 +1,8 @@
+Build/
+*.user
+.vs/
+x64/
+*.obj
+*.pdb
+*.ilk
+*.ipch
