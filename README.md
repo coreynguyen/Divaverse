@@ -12,6 +12,8 @@ adult performers on your desktop, standing on the taskbar. One static `Divaverse
 
 ![Wet-Rash Spear Run: sun and storm](docs/screenshots/wetrash_spear.png)
 
+![Wet-Rash hair styles](docs/screenshots/wetrash_hair.png)
+
 *Screenshots come from the automated Wine test harness (CPU decode, layered window). Some translucent gradients
 render as solid white under Wine; on Windows they render as intended.*
 

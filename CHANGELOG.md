@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.9.0 (hair, reflections, refraction, beads)
+- Hair: ten styles (long ponytail, extra-long high ponytail, twin tails, loose straight, loose wavy, curls, long
+  braid, twin braids, side ponytail, short bob), up to hip length and beyond. The mass is filled between
+  neighbouring strands and thins toward the tips; strands curl in locks; two sheen bands; upper strands lit.
+- Reflections: each rider is mirrored below her waterline in thin bands that slide with the ripples and break up
+  with distance; clouds and the far boats / islands are mirrored in the far water.
+- Refraction: the part of the hull under the waterline is drawn row by row, shifted sideways and foreshortened;
+  bright wandering lines of bent light on the near water.
+- Water beads: drops land on skin and hull, cling, then run down in fits and starts leaving a wet track, and drip
+  off the lowest edge as real droplets. More of them in rain and after a landing.
+- QA scene: --uishot 51 (all hair styles).
+
 ## 0.8.0 (Spear Run quality pass)
 - Fixed: on the game menu Left / Right on "Weather" changed the course and the other way round.
 - Camera pulled back in Spear Run (riders are about 27 % smaller on screen).
