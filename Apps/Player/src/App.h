@@ -21,7 +21,7 @@ constexpr UINT WM_APP_TRAY = WM_APP + 1, WM_APP_POSTER = WM_APP + 2, WM_APP_SHOW
 struct Settings {
     int x = INT_MIN, bottom = INT_MIN;     // where the clip's ground anchor sits on screen: x, and the y of the floor line
     float scale = 1.0f, opacity = 1.0f;    // scale = stage scale: 1.0 shows one metre as kStagePxPerMetre DIPs
-    int wrLook = 0x0001;                   // Wet-Rash rider: skin | bikini<<4 | ski<<8 | hair<<12
+    int wrLook = 0x0001;                   // Wet-Rash rider: skin | bikini<<4 | ski<<8 | hair<<12 | hair style<<16
     bool clickThrough = false, lock = false, gravity = true, seasonal = true, editor = false;
     int loopMode = 0;                      // 0 repeat clip, 1 play the diva's clips in order, 2 shuffle
     int cardMode = 1; float zoom = 1.0f;   // library: 0 small square tiles, 1 large cards

@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.8.0 (Spear Run quality pass)
+- Fixed: on the game menu Left / Right on "Weather" changed the course and the other way round.
+- Camera pulled back in Spear Run (riders are about 27 % smaller on screen).
+- Steering handle grips are drawn over her hands in the riding / tuck frames (the throw frames have them painted in).
+- Sprites are lit: a height field from the silhouette and the painted shading gives a normal per pixel; key light,
+  sky rim light and specular highlights are baked per material (skin, bikini, hair, ski), plus a wet-glint layer
+  whose strength follows how wet she is (rain, landings).
+- Hair styles (new row on the rider screen, saved): long ponytail, twin tails, loose and long, braid, short bob.
+  Much longer, drawn as spring-driven streaming curves with a sheen band; the race view scales its strands to match.
+- Chest secondary motion in the side view: the bikini-top region is cut out per frame at bake time and driven by a
+  spring from the body's vertical acceleration and the throw.
+- Water: droplets with gravity and drag drawn as streaks, mist, foam that stays on the surface and drifts back with
+  the flow, bow wave, rooster tail, landing and spear-entry splashes, crest foam, sun glitter, rain rings,
+  reflections of the riders, depth gradient.
+- Blood: directional burst on a hit, drips while wounded, stains that spread on the water and drift away, wounds on
+  the sprite that fade, red edge flash when you are hit.
+- Clouds are generated (fbm density in a flat-bottomed dome, lit from the sun side), one set per weather, used by
+  both the race and Spear Run.
+- Feel: hit-stop, combo multiplier, floating score numbers.
+- QA scenes: --uishot 49 (moment of a hit), 50 (rider screen on the hair style row).
+
 ## 0.7.0
 - Wet-Rash: new mode "Spear Run" (menu item 2), a side view of the same riders. You ride at the left with two
   rivals ahead; Left / Right move, Up hop, Down duck (the sit-to-tuck frames), J / pad X throw. Rivals take three

@@ -27,7 +27,8 @@ render as solid white under Wine; on Windows they render as intended.*
   weather types, rider/bikini/ski/hair colours, keyboard and controller, all graphics and sound generated in code
   apart from the rider and ski key frames.
   A second mode, Spear Run, shows the same riders from the side: move, hop, duck and throw spears at the two
-  rivals, with the same colours and weather.
+  rivals, with the same colours and weather. Sprites are lit per pixel from a generated height field; hair (five
+  styles), chest motion, spray, foam, blood, clouds and reflections are all generated at run time.
 - Themes (Windows, Light, Neon, Pink), seasonal decorations, synthesised interface sounds, editor mode for authored scale.
 
 ## Content

@@ -31,5 +31,5 @@ DIVAVERSE_QA_MUSIC="Z:$R/mus" timeout 60 wine Divaverse.exe --uishot 11 "Z:$R/al
 grep -q 'qa music: added 4.*with 2 entries' "$WINEPREFIX"/drive_c/users/*/AppData/Local/Divaverse/player.log && echo "PASS music_recursive_import_and_m3u" || { echo "FAIL music_recursive_import_and_m3u"; FAIL=1; }
 for pg in 0 1 2 3 10 11 20 21 22 30 31; do timeout 60 wine Divaverse.exe --theme dark --uishot $pg "Z:$R/ui$pg.bmp" "$D" >/dev/null 2>&1 && echo "PASS ui_page_$pg" || { echo "FAIL ui_page_$pg"; FAIL=1; }; done
 # Wet-Rash: 41 = 19 s of real simulation in sun, 42 = the same in a hurricane, 45 = a whole race to the results screen
-for sc in 41 42 45 40 43 44 46 47 48; do timeout 240 wine Divaverse.exe --uishot $sc "Z:$R/wetrash$sc.bmp" >/dev/null 2>&1 && echo "PASS wetrash_scene_$sc" || { echo "FAIL wetrash_scene_$sc"; FAIL=1; }; done
+for sc in 41 42 45 40 43 44 46 47 48 49 50; do timeout 240 wine Divaverse.exe --uishot $sc "Z:$R/wetrash$sc.bmp" >/dev/null 2>&1 && echo "PASS wetrash_scene_$sc" || { echo "FAIL wetrash_scene_$sc"; FAIL=1; }; done
 echo "artifacts in $R"; exit $FAIL
