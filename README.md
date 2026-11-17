@@ -10,6 +10,8 @@ adult performers on your desktop, standing on the taskbar. One static `Divaverse
 
 ![Wet-Rash: sun and hurricane](docs/screenshots/wetrash_weather.png)
 
+![Wet-Rash Spear Run: sun and storm](docs/screenshots/wetrash_spear.png)
+
 *Screenshots come from the automated Wine test harness (CPU decode, layered window). Some translucent gradients
 render as solid white under Wine; on Windows they render as intended.*
 
@@ -24,6 +26,8 @@ render as solid white under Wine; on Windows they render as intended.*
 - **Wet-Rash**: a jet-ski brawl racer against two bots: punches and kicks, air tricks, three courses, four
   weather types, rider/bikini/ski/hair colours, keyboard and controller, all graphics and sound generated in code
   apart from the rider and ski key frames.
+  A second mode, Spear Run, shows the same riders from the side: move, hop, duck and throw spears at the two
+  rivals, with the same colours and weather.
 - Themes (Windows, Light, Neon, Pink), seasonal decorations, synthesised interface sounds, editor mode for authored scale.
 
 ## Content

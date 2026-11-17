@@ -7,6 +7,8 @@ IDI_APP_EDIT    ICON "app_edit.ico"
 IDR_LOGO        RCDATA "logo.png"
 IDR_WR_ATLAS    RCDATA "wetrash/atlas.png"
 IDR_WR_MASKS    RCDATA "wetrash/masks.png"
+IDR_WR_SATLAS   RCDATA "wetrash/side_atlas.png"
+IDR_WR_SMASKS   RCDATA "wetrash/side_masks.png"
 
 CREATEPROCESS_MANIFEST_RESOURCE_ID RT_MANIFEST "Player.manifest"
 

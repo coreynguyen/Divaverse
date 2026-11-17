@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.7.0
+- Wet-Rash: new mode "Spear Run" (menu item 2), a side view of the same riders. You ride at the left with two
+  rivals ahead; Left / Right move, Up hop, Down duck (the sit-to-tuck frames), J / pad X throw. Rivals take three
+  hits, blink red when hit, drop back when knocked out and rejoin; they throw back. 90 second round, score.
+- Rider, bikini, ski and hair colours and the weather setting carry over from the race and back.
+- Side sprites are drawn as the artist layered them (ski body, rider, hull over her feet, steering handle). In the
+  throw frames the handle is rotated and scaled about its pivot on the ski so the grip stays in her hand. The spear
+  painted in the last throw frame is removed at bake time and replaced by the separate spear sprite as a projectile.
+- Generated for this mode: layered swell, far sea with the existing prop sprites as parallax, clouds, sun, rain,
+  lightning, spray, exhaust jet, ponytail strands and bikini tie strings.
+- QA scenes: --uishot 46 (sun, simulated), 47 (storm, simulated), 48 (frozen throw poses).
+
 ## 0.6.2
 - Wet-Rash: props are baked shaded pixel-art sprites (posterised, dithered, outlined) instead of flat vector
   shapes; three courses (Lagoon, Reef Run, Open Sea) with their own length, bends and hazard density; chest

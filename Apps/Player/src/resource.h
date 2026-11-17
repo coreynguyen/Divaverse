@@ -5,3 +5,5 @@
 #define IDR_LOGO         201
 #define IDR_WR_ATLAS     210
 #define IDR_WR_MASKS     211
+#define IDR_WR_SATLAS    212
+#define IDR_WR_SMASKS    213

@@ -106,6 +106,7 @@
     <ClInclude Include="src\Synth.h" />
     <ClInclude Include="src\UserData.h" />
     <ClInclude Include="src\WetRashData.h" />
+    <ClInclude Include="src\WetRashSide.h" />
     <ClInclude Include="src\VideoSource.h" />
     <ClInclude Include="src\resource.h" />
   </ItemGroup>
