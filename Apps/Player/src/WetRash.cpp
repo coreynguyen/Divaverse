@@ -661,24 +661,26 @@ void BakeSide(const Look& lk, SideSpr& sp) {
 }
 
 // ---- state
-const int HS = 30, HN = 18, HSTYLES = 10;
-// root: 0 back of the head, 1 crown, 2 twin (one behind, one in front), 3 along the scalp, 4 plait(s) from the nape, 5 bob, 6 over the near shoulder
-struct HairStyle { const wchar_t* name; int n, nodes; float seg, width, grav, wind, fan, droop, rip, wave, waveF; int root; };
+const int HG = 8, HN = 18, HSTYLES = 10, TN = 6, TMAX = 8;
+// root: 0 back of the head, 1 crown, 2 twin (one behind, one in front), 3 along the scalp, 4 plait(s) from the nape, 5 bob, 6 over the near shoulder.
+// groups x g guide strands are simulated; vol is the spacing kept between neighbours, stiffRoot / stiff how strongly the rest shape is held near the root / all along,
+// curl / curlF the rest curvature (radians per segment, and how fast it alternates), drag how much the air takes hold, dir the angle it leaves the head at (0 back, pi/2 down).
+struct HairStyle { const wchar_t* name; int root, groups, g, nodes; float seg, vol, stiffRoot, stiff, curl, curlF, drag, width, dir; };
 const HairStyle kStyle[HSTYLES] = {
-    { L"Long ponytail",        26, 16, 8.4f, 2.2f, 470, 1.00f, 0.30f, 0.55f, 0.30f, 0,     0,    0 },
-    { L"High ponytail, extra long", 26, 18, 9.4f, 2.2f, 470, 1.00f, 0.28f, 1.00f, 0.30f, 0, 0,   1 },
-    { L"Twin tails",           28, 16, 8.0f, 2.1f, 480, 1.00f, 0.30f, 0.60f, 0.30f, 0,     0,    2 },
-    { L"Loose, straight",      30, 18, 8.4f, 2.2f, 430, 1.00f, 0.75f, 0.50f, 0.24f, 0,     0,    3 },
-    { L"Loose, wavy",          30, 18, 8.4f, 2.2f, 430, 1.00f, 0.80f, 0.50f, 0.22f, 0.42f, 7.5f, 3 },
-    { L"Curls",                30, 18, 5.6f, 2.4f, 450, 0.70f, 1.00f, 0.50f, 0.16f, 1.15f, 13.f, 3 },
-    { L"Long braid",            1, 18, 7.2f, 1.5f, 760, 0.75f, 0.04f, 0.75f, 0.14f, 0,     0,    4 },
-    { L"Twin braids",           2, 16, 6.8f, 1.5f, 760, 0.75f, 0.04f, 0.75f, 0.14f, 0,     0,    4 },
-    { L"Side ponytail",        24, 16, 7.6f, 2.1f, 700, 0.55f, 0.30f, 0.50f, 0.22f, 0.20f, 6.f,  6 },
-    { L"Short bob",            22,  6, 3.6f, 2.2f, 620, 0.13f, 1.00f, 0.50f, 0.10f, 0,     0,    5 } };
+    { L"Long ponytail",             0, 1, 8, 17, 9.4f, 3.2f, 0.50f, 0.008f, 0,     0,    1.00f, 2.1f, 0.45f },
+    { L"High ponytail, extra long", 1, 1, 8, 18, 11.0f, 3.2f, 0.55f, 0.008f, 0,     0,    1.00f, 2.1f, -0.70f },
+    { L"Twin tails",                2, 2, 4, 17, 8.8f, 3.6f, 0.45f, 0.008f, 0,     0,    1.00f, 2.1f, 0.55f },
+    { L"Loose, straight",           3, 1, 8, 18, 10.2f, 1.3f, 0.40f, 0.008f, 0,     0,    1.00f, 2.2f, 0.9f },
+    { L"Loose, wavy",               3, 1, 8, 18, 10.6f, 1.5f, 0.40f, 0.10f, 0.40f, 0.9f, 0.95f, 2.2f, 0.9f },
+    { L"Curls",                     3, 1, 8, 18, 6.6f, 2.0f, 0.40f, 0.26f, 0.95f, 1.6f, 0.80f, 2.3f, 0.9f },
+    { L"Long braid",                4, 1, 1, 18, 8.4f, 0,    0.40f, 0.06f, 0,     0,    0.50f, 1.5f, 1.0f },
+    { L"Twin braids",               4, 2, 1, 17, 7.6f, 0,    0.40f, 0.06f, 0,     0,    0.50f, 1.5f, 1.0f },
+    { L"Side ponytail",             6, 1, 6, 17, 8.2f, 3.0f, 0.45f, 0.008f, 0.10f, 0.7f, 0.90f, 2.1f, 1.45f },
+    { L"Short bob",                 5, 1, 8,  7, 5.0f, 1.0f, 0.45f, 0.06f, 0,     0,    0.80f, 2.2f, 1.3f } };
 struct Bead { float x, y, vy, size, stick, age, y0; int id; };
 struct Wound { float x = 0, y = 0, t = 0; };
 struct SRider { float x = 0, hop = 0, vy = 0, duck = 0, throwT = -1, flash = 0, cool = 0, hp = 3, out = 0, aiT = 1, aiX = 0, face = 1, wet = 0.3f, jy = 0, jvy = 0, jx = 0, jvx = 0, py = 0, pvy = 0, bleed = 0, ays = 0, ha = 0.5f, hav = 0; bool threw = false, bot = true, pinit = false; float soak = 0; std::vector<Bead> beads;
-    Look look; SideSpr spr; V2 hair[HS][HN], hairP[HS][HN], tie[2][4], tieP[2][4]; bool init = false; int istyle = -1; Wound wound[5]; std::wstring name; };
+    Look look; SideSpr spr; V2 hair[HG][HN], hairP[HG][HN], tie[TMAX][TN], tieP[TMAX][TN], hO = { 0, 0 }; bool tinit[TMAX] = {}, hOk = false; int tieN = 0; bool init = false; int istyle = -1; Wound wound[5]; std::wstring name; };
 struct Spear { float x, y, vx, vy; int owner; bool live; };
 enum { FX_DROP, FX_MIST, FX_BLOOD, FX_FOAM, FX_STAIN };
 struct Fx { float x, y, vx, vy, life, max, size; int kind; uint32_t col; };
@@ -790,69 +792,115 @@ void SideDraw(SRider& r, float sx, float base, float S, float rot, bool sim) {
     int f = SideFrame(r); const SdFrameInfo& fi = kSdFrames[f]; const HairStyle& hs = kStyle[r.look.style % HSTYLES]; const float dt = 1 / 60.f;
     // sprite space: 318x237 cell, ski centre x = 117, waterline about y = 215
     auto M = D2D1::Matrix3x2F::Translation(-117, -215) * D2D1::Matrix3x2F::Scale(r.face * S, S) * D2D1::Matrix3x2F::Rotation(rot * r.face) * D2D1::Matrix3x2F::Translation(sx, base - r.hop + 4 * S);
+    auto Mnr = D2D1::Matrix3x2F::Translation(-117, -215) * D2D1::Matrix3x2F::Scale(r.face * S, S) * D2D1::Matrix3x2F::Translation(sx, base - r.hop + 4 * S);     // the same without the tilt: hair and ties live in an upright frame
     bool red = r.flash > 0 && std::fmod(r.flash, 0.12f) > 0.05f;
     auto blit = [&](int k, bool rd) { const int* b = kSdFrames[k].bbox; RectF d = RF((float)b[0], (float)b[1], (float)(b[2] - b[0]), (float)(b[3] - b[1])); C().BitmapPx((rd ? r.spr.red[k] : r.spr.f[k]).Get(), d); if (!rd && r.wet > 0.02f && r.spr.wet[k]) C().BitmapPx(r.spr.wet[k].Get(), d, std::min(1.f, r.wet)); };
     if (sim) {
         // secondary motion is driven by how the body is being accelerated, in sprite pixels
         float y = (base - r.hop) / S; if (!r.pinit) { r.py = y; r.pvy = 0; r.pinit = true; } float vy = (y - r.py) / dt, ay = std::clamp((vy - r.pvy) / dt, -5000.f, 5000.f); r.py = y; r.pvy = vy; r.ays += (ay - r.ays) * 0.15f;
         r.jvy += (-260 * r.jy - 13 * r.jvy + ay * 0.11f) * dt; r.jy = std::clamp(r.jy + r.jvy * dt, -5.f, 6.f); r.jvx += (-300 * r.jx - 15 * r.jvx) * dt; r.jx = std::clamp(r.jx + r.jvx * dt, -4.f, 4.f);
-        float hx = fi.head[0], hy = fi.head[1], hr = fi.head[2], wind = -(1050 + G.gust * 900 + (G.weather == 3 ? 620.f : G.weather == 2 ? 260.f : 0)) * hs.wind;
-        if (r.istyle != r.look.style) { r.init = false; r.istyle = r.look.style; }
-        auto chain = [&](V2* p, V2* q, int n, V2 a, float seg, float ph, float grav, float wnd, bool head) {
-            if (!r.init) for (int i = 0; i < n; ++i) p[i] = q[i] = { a.x - seg * i * 0.8f, a.y + seg * i * 0.6f }; p[0] = a;
-            for (int i = 1; i < n; ++i) { V2 v = { (p[i].x - q[i].x) * 0.94f, (p[i].y - q[i].y) * 0.94f }; q[i] = p[i]; float fl = (std::sin(G.t * 8 - i * 0.7f + ph * 0.12f) * 230 + std::sin(G.t * 17 - i * 1.1f + ph * 0.4f) * 60) * (0.3f + 0.7f * i / n);      // neighbouring strands move together, so it reads as a mass
-                p[i].x += v.x + wnd * (0.75f + 0.25f * std::sin(G.t * 3 + ph)) * dt * dt; p[i].y += v.y + (grav + fl - r.ays * 0.10f) * dt * dt; }
-            for (int it = 0; it < 4; ++it) for (int i = 1; i < n; ++i) { float dx = p[i].x - p[i - 1].x, dy = p[i].y - p[i - 1].y, d = std::sqrt(dx * dx + dy * dy) + 1e-4f, k = (d - seg) / d; p[i].x -= dx * k; p[i].y -= dy * k;
-                if (head) { float ex = p[i].x - hx, ey = p[i].y - hy, e = std::sqrt(ex * ex + ey * ey) + 1e-4f; if (e < hr * 0.98f) { p[i].x = hx + ex / e * hr * 0.98f; p[i].y = hy + ey / e * hr * 0.98f; }
-                    if (p[i].y > hy + hr * 0.7f && p[i].x > hx - hr * 0.55f) p[i].x = hx - hr * 0.55f; } } };                      // keep it behind the neck and shoulders
-        float tgt = std::atan2(hs.grav, -wind); r.hav += ((tgt - r.ha) * 60 - r.hav * 7 - r.ays * 0.0009f) * dt; r.ha = std::clamp(r.ha + r.hav * dt, -0.5f, 1.9f);                 // the whole mass swings on a spring: wind against gravity, kicked by hops and waves
-        for (int s = 0; s < hs.n; ++s) { V2 a; float u = hs.n > 1 ? s / (float)(hs.n - 1) : 0.5f, seg = hs.seg * (hs.root == 4 ? 1.f : 0.84f + 0.22f * Hash(s * 3 + 1)), th0 = r.ha;
+        // ---- hair and ties: position-based strands. They are simulated in an upright frame that travels with the rider, so every hop, wave, lunge and pose change
+        // reaches them as real motion of their roots. Forces are gravity and air drag against the apparent wind (with a travelling turbulence field); constraints keep
+        // segment length, a rest shape (stiff where the hair leaves the head or its tie, the style's curl further down), spacing between neighbouring guides (volume),
+        // and keep everything outside the head and off her back, using the sprite's own silhouette.
+        float hx = fi.head[0], hy = fi.head[1], hr = fi.head[2], cr = std::cos(rot * PI / 180), sr = std::sin(rot * PI / 180), wetH = std::clamp((r.wet - 0.3f) * 1.4f, 0.f, 1.f);
+        auto up = [&](V2 p) { float x = p.x - 117, y = p.y - 215; return V2{ 117 + x * cr - y * sr, 215 + x * sr + y * cr }; };            // sprite -> upright
+        auto dn = [&](V2 p) { float x = p.x - 117, y = p.y - 215; return V2{ 117 + x * cr + y * sr, 215 - x * sr + y * cr }; };            // upright -> sprite
+        auto alphaAt = [&](int k, V2 s) { const int* b = kSdFrames[k].bbox; int xi = (int)std::floor(s.x) - b[0], yi = (int)std::floor(s.y) - b[1], w = b[2] - b[0]; const auto& am = r.spr.am[k];
+            return xi >= 0 && yi >= 0 && xi < w && yi < b[3] - b[1] && (size_t)(yi * w + xi) < am.size() && am[(size_t)yi * w + xi] > 128; };
+        auto collide = [&](V2& p, V2& q, float m) { V2 s = dn(p); /* m: how far off the surface this strand rides, so the layers stack into a thickness */ bool hit = false; float ex = s.x - hx, ey = s.y - hy, e = std::sqrt(ex * ex + ey * ey);
+            if (e < hr * 0.97f + m * 0.6f && e > 1e-3f) { s.x = hx + ex / e * (hr * 0.97f + m * 0.6f); s.y = hy + ey / e * (hr * 0.97f + m * 0.6f); hit = true; }
+            if (alphaAt(f, { s.x + m, s.y })) for (int k = 1; k <= 22; ++k) if (!alphaAt(f, { s.x + m - k, s.y })) { s.x -= k - 0.4f; hit = true; break; }                     // off her back: out toward behind her
+            if (alphaAt(SD_BODY, s)) for (int k = 1; k <= 12; ++k) if (!alphaAt(SD_BODY, { s.x, s.y - k })) { s.y -= k - 0.4f; hit = true; break; }         // and it lies on the seat
+            if (hit) { V2 n = up(s); q = { n.x - (p.x - q.x) * 0.55f, n.y - (p.y - q.y) * 0.55f }; p = n; } };                                             // friction where it touches
+        V2 O = { r.face * sx / S, (base - r.hop) / S }; if (!r.hOk || r.istyle != r.look.style) { r.hO = O; r.hOk = true; r.init = false; r.istyle = r.look.style; for (bool& b : r.tinit) b = false; }
+        V2 dO = { std::clamp(O.x - r.hO.x, -30.f, 30.f), std::clamp(O.y - r.hO.y, -30.f, 30.f) }; r.hO = O;
+        const int NG = hs.groups * hs.g; const float h = 1 / 120.f, air = -(250 + G.gust * 330 + (G.weather == 3 ? 210.f : G.weather == 2 ? 95.f : 0)), turb = 250.f + 150 * G.weather;
+        auto rootOf = [&](int g, V2& a, float& th) { int grp = g / hs.g; float u = hs.g > 1 ? (g % hs.g) / (float)(hs.g - 1) : 0.5f;
             switch (hs.root) {
-            case 0: a = { hx - hr * 0.80f + (s % 3 - 1) * 0.9f, hy - hr * 0.30f + (u - 0.5f) * 3.2f }; break;
-            case 1: a = { hx - hr * 0.42f + (s % 3 - 1) * 0.8f, hy - hr * 0.86f + (u - 0.5f) * 2.4f }; th0 -= 0.55f; break;                                  // leaves the crown rising, then falls
-            case 2: if (s & 1) a = { hx - hr * 0.05f + (u - 0.5f) * 2, hy + hr * 0.15f + (s % 4) * 0.5f }; else a = { hx - hr * 0.78f, hy - hr * 0.45f + (u - 0.5f) * 3 }; break;
-            case 3: { float an = (98 + 125 * u) * PI / 180; a = { hx + std::cos(an) * hr * 0.9f, hy - std::sin(an) * hr * 0.9f }; seg *= 0.85f + 0.3f * u; } break;
-            case 4: if (s == 1) a = { hx - hr * 0.02f, hy + hr * 0.32f }; else a = { hx - hr * 0.86f, hy + hr * 0.04f }; break;
-            case 6: a = { hx - hr * 0.05f + (u - 0.5f) * 2.5f, hy + hr * 0.30f + (s % 4) * 0.5f }; break;
-            default: { float an = (105 + 135 * u) * PI / 180; a = { hx + std::cos(an) * hr * 0.92f, hy - std::sin(an) * hr * 0.92f }; } break; }
-            // each strand is a curve leaving the head at the mass's current angle; it droops, ripples and (for wavy and curly styles) curls more toward the tip. Strands curl in locks of three.
-            V2* p = r.hair[s]; p[0] = a; th0 += (u - 0.5f) * hs.fan * 0.4f + (Hash(s * 17 + 5) - 0.5f) * 0.10f; float lock = (s / 3) * 1.9f;
-            for (int i = 1; i < hs.nodes; ++i) { float t = i / (float)(hs.nodes - 1), th = th0 + hs.droop * t * t + hs.rip * t * std::sin(G.t * 7.5f - t * 4.6f + s * 0.31f) + hs.rip * 0.4f * t * std::sin(G.t * 13 - t * 9 + s * 1.1f)
-                    + hs.wave * std::sin(t * hs.waveF + lock) * (0.3f + 0.7f * t) + (u - 0.5f) * hs.fan * t;
-                p[i] = { p[i - 1].x - std::cos(th) * seg, p[i - 1].y + std::sin(th) * seg }; } }
-        for (int k = 0; k < 2 && fi.nTies; ++k) chain(r.tie[k], r.tieP[k], 4, { fi.ties[0][0], fi.ties[0][1] }, 3.6f, k * 3.f + 7, 520, wind * 0.8f, false);
+            case 0: a = { hx - hr * 0.80f, hy - hr * 0.30f + (u - 0.5f) * 2.4f }; th = hs.dir + (u - 0.5f) * 0.55f; break;
+            case 1: a = { hx - hr * 0.42f + (u - 0.5f) * 1.6f, hy - hr * 0.86f }; th = hs.dir + (u - 0.5f) * 0.5f; break;
+            case 2: if (grp) { a = { hx - hr * 0.05f, hy + hr * 0.18f + (u - 0.5f) * 2 }; th = 1.25f + (u - 0.5f) * 0.4f; } else { a = { hx - hr * 0.78f, hy - hr * 0.42f + (u - 0.5f) * 2.4f }; th = hs.dir + (u - 0.5f) * 0.5f; } break;
+            case 3: { float an = (96 + 128 * u) * PI / 180; a = { hx + std::cos(an) * hr * 0.92f, hy - std::sin(an) * hr * 0.92f }; th = std::min(an - PI / 2, 1.75f); } break;                   // leaves along the scalp, toward the nape
+            case 4: if (grp) { a = { hx - hr * 0.02f, hy + hr * 0.34f }; th = 1.4f; } else { a = { hx - hr * 0.86f, hy + hr * 0.04f }; th = 1.0f; } break;
+            case 6: a = { hx - hr * 0.05f + (u - 0.5f) * 2.5f, hy + hr * 0.30f }; th = hs.dir + (u - 0.5f) * 0.35f; break;
+            default: { float an = (118 + 128 * u) * PI / 180; a = { hx + std::cos(an) * hr * 0.94f, hy - std::sin(an) * hr * 0.94f }; th = std::min(an - PI / 2, 1.7f); } break; }
+            a = up(a); th -= rot * PI / 180; };
+        auto integ = [&](V2* p, V2* q, int n, float drag, float grav) { for (int i = 1; i < n; ++i) { p[i].x -= dO.x * 0.5f; p[i].y -= dO.y * 0.5f; q[i].x -= dO.x * 0.5f; q[i].y -= dO.y * 0.5f;      // the rider moved; the hair has not yet
+            V2 v = { (p[i].x - q[i].x) / h, (p[i].y - q[i].y) / h }; float tx = N2((p[i].x + O.x) * 0.021f + G.t * 2.4f, p[i].y * 0.021f + r.x * 7) - 0.5f, ty = N2((p[i].x + O.x) * 0.021f + 31 + G.t * 2.0f, p[i].y * 0.021f - 17) - 0.5f;
+            float ax = drag * (air + tx * turb * 2 - v.x), ay = drag * (ty * turb * 1.3f - v.y) + grav; q[i] = p[i]; p[i].x += v.x * h * 0.994f + ax * h * h; p[i].y += v.y * h * 0.994f + ay * h * h; } };
+        auto shape = [&](V2* p, V2* q, int n, V2 root, float th0, float seg, float stiffRoot, float stiff, float curl, float curlF, float ph, bool col, float m) {
+            p[0] = root; V2 d0 = { -std::cos(th0), std::sin(th0) };
+            for (int i = 1; i < n; ++i) { float t = i / (float)(n - 1); V2 pd = d0; if (i > 1) { float dx = p[i - 1].x - p[i - 2].x, dy = p[i - 1].y - p[i - 2].y, l = std::sqrt(dx * dx + dy * dy) + 1e-4f; pd = { dx / l, dy / l }; }
+                float k = i > 1 ? curl * std::sin(i * curlF + ph) : 0, ck = std::cos(k), sk = std::sin(k), st = stiffRoot * std::max(0.f, 1 - (i - 1) / 3.f) + stiff;                 // the root direction is held for the first few segments only; after that it is the style's own springiness
+                p[i].x += (p[i - 1].x + (pd.x * ck - pd.y * sk) * seg - p[i].x) * st; p[i].y += (p[i - 1].y + (pd.x * sk + pd.y * ck) * seg - p[i].y) * st;
+                float dx = p[i].x - p[i - 1].x, dy = p[i].y - p[i - 1].y, d = std::sqrt(dx * dx + dy * dy) + 1e-4f, c = (d - seg) / d;
+                if (i > 1) { p[i - 1].x += dx * c * 0.12f; p[i - 1].y += dy * c * 0.12f; p[i].x -= dx * c * 0.88f; p[i].y -= dy * c * 0.88f; } else { p[i].x -= dx * c; p[i].y -= dy * c; }
+                if (col && i >= 2) collide(p[i], q[i], m); } };
+        auto lay = [&](V2* p, V2* q, int n, V2 root, float th0, float seg) { float th = th0 * 0.5f + 0.75f; for (int i = 0; i < n; ++i) p[i] = q[i] = { root.x - std::cos(th) * seg * i, root.y + std::sin(th) * seg * i }; };
+        V2 ra[HG]; float rth[HG]; for (int g = 0; g < NG; ++g) { rootOf(g, ra[g], rth[g]); if (!r.init) lay(r.hair[g], r.hairP[g], hs.nodes, ra[g], rth[g], hs.seg); }
+        int nt = std::min(fi.nTies, TMAX / 2); V2 ta[TMAX]; for (int k = 0; k < nt * 2; ++k) { ta[k] = up({ fi.ties[k / 2][0], fi.ties[k / 2][1] }); if (!r.tinit[k]) { lay(r.tie[k], r.tieP[k], TN, ta[k], 1.3f + (k & 1) * 0.5f, 2.6f); r.tinit[k] = true; } }
         r.init = true;
+        for (int sub = 0; sub < 2; ++sub) {
+            for (int g = 0; g < NG; ++g) integ(r.hair[g], r.hairP[g], hs.nodes, 3.3f * hs.drag * (1 - 0.35f * wetH), 1150 * (1 + 0.25f * wetH));
+            for (int k = 0; k < nt * 2; ++k) integ(r.tie[k], r.tieP[k], TN, 5.5f, 1150);
+            for (int it = 0; it < 3; ++it) {
+                for (int g = 0; g < NG; ++g) shape(r.hair[g], r.hairP[g], hs.nodes, ra[g], rth[g], hs.seg * (1 - 0.05f * (g % 3)), hs.stiffRoot, hs.stiff, hs.curl, hs.curlF, g * 2.1f, !(hs.root == 6 || ((hs.root == 2 || hs.root == 4) && g >= hs.g)), (hs.root == 3 || hs.root == 5 ? (hs.g - 1 - g % hs.g) : (g % hs.g)) * 1.25f);
+                for (int g = 0; g + 1 < NG; ++g) { if ((g + 1) % hs.g == 0) continue;                                                                    // volume: neighbours neither merge nor part
+                    for (int i = 1; i < hs.nodes; ++i) { float t = i / (float)(hs.nodes - 1), dmin = hs.vol * (0.25f + 0.75f * t) * (1 - 0.55f * wetH), dmax = dmin * 2.3f + 1; V2& a = r.hair[g][i], &b = r.hair[g + 1][i];
+                        float dx = b.x - a.x, dy = b.y - a.y, d = std::sqrt(dx * dx + dy * dy); if (d < 1e-3f) { dx = 0; dy = 1; d = 1; a.y -= 0.01f; } float want = d < dmin ? dmin : d > dmax ? dmax : d;
+                        if (want != d) { float c = (want - d) / d * 0.5f; a.x -= dx * c; a.y -= dy * c; b.x += dx * c; b.y += dy * c; } } }
+                for (int k = 0; k < nt * 2; ++k) shape(r.tie[k], r.tieP[k], TN, ta[k], 1.3f + (k & 1) * 0.5f - rot * PI / 180, 2.4f + (k & 1) * 0.6f, 0.22f, 0, 0, 0, 0, true, 0.5f);
+            }
+            dO = { dO.x, dO.y };
+        }
+        r.tieN = nt * 2;
+        if (wetH > 0.5f && Rnd(G.rng) < 0.3f * wetH) { V2 tp = r.hair[(int)(Rnd(G.rng) * NG) % NG][hs.nodes - 1]; D2D1_POINT_2F wp = Mnr.TransformPoint({ tp.x, tp.y }); Emit(FX_DROP, wp.x, wp.y, -r.face * 50 * S, 30 * S, 0.7f, (1 + Rnd(G.rng)) * S); }   // wet hair drips from the ends
     }
-    Color hc = Hex(kHair[r.look.hair]), hd = Mix(hc, Hex(0x000000), 0.45f), hl = Mix(hc, Hex(0xFFFFFF), 0.38f), bc = Hex(kBikini[r.look.bikini]);
-    auto inFront = [&](int s) { return (hs.root == 2 && (s & 1)) || hs.root == 6 || (hs.root == 4 && s == 1); };
+    float wetD = std::clamp((r.wet - 0.3f) * 1.4f, 0.f, 1.f);
+    Color hc = Mix(Hex(kHair[r.look.hair]), Hex(0x000000), 0.22f * wetD), hd = Mix(hc, Hex(0x000000), 0.55f), hl = Mix(hc, Hex(0xFFFFFF), 0.45f), bc = Hex(kBikini[r.look.bikini]);
     auto strands = [&](int phase) {                                                                // phase 0 behind her, 1 in front of her shoulder
-        if (hs.root == 4) { for (int s = 0; s < hs.n; ++s) { if (inFront(s) != (phase == 1)) continue; V2* p = r.hair[s];          // plait: crossing links along the chain, then a tuft
-            for (int i = 1; i < hs.nodes; ++i) { float t = i / (float)hs.nodes, w = 3.8f * (1 - t * 0.5f); V2 a = p[i - 1], b = p[i]; C().Line(a.x, a.y, b.x, b.y, hd, w * 2 + 1.4f); }
-            for (int i = 1; i < hs.nodes; ++i) { float t = i / (float)hs.nodes, w = 3.8f * (1 - t * 0.5f); V2 a = p[i - 1], b = p[i]; float nx = -(b.y - a.y), ny = b.x - a.x, l = std::sqrt(nx * nx + ny * ny) + 1e-4f, o = (i & 1 ? 1.f : -1.f) * w * 0.45f; nx /= l; ny /= l;
-                C().Line(a.x + nx * o, a.y + ny * o, b.x - nx * o, b.y - ny * o, i & 1 ? hc : hl, w * 1.15f); }
-            V2 e = p[hs.nodes - 1], e0 = p[hs.nodes - 2]; float dx = e.x - e0.x, dy = e.y - e0.y; C().Circle(e.x, e.y, 2.4f, bc); for (int k = -3; k <= 3; ++k) C().Line(e.x, e.y, e.x + dx * 1.9f + k * 1.2f, e.y + dy * 1.9f + std::fabs((float)k), k & 1 ? hc : hd, 1.1f); }
-            return; }
-        int idx[HS], n = 0; for (int s = 0; s < hs.n; ++s) if (inFront(s) == (phase == 1)) idx[n++] = s; if (!n) return;
-        Color body = Mix(hd, hc, 0.45f);                                                           // the mass: filled between neighbouring strands, thinning out before the tips
-        for (int k = 1; k < n; ++k) { V2* A = r.hair[idx[k - 1]], *B = r.hair[idx[k]]; for (int i = 1; i < hs.nodes; ++i) { float t = i / (float)(hs.nodes - 1); if (t > 0.88f) break;
-            C().Quad(A[i - 1].x, A[i - 1].y, B[i - 1].x, B[i - 1].y, B[i].x, B[i].y, A[i].x, A[i].y, Alpha(body, 1 - t * 0.45f)); } }
-        for (int k = 0; k < n; ++k) { int s = idx[k]; V2* p = r.hair[s]; float lit = 1 - k / (float)std::max(1, n - 1);                    // upper strands catch the light
-            Color base = s % 4 == 0 ? hd : Mix(hc, hl, 0.15f + 0.45f * lit * (s % 2));
-            for (int i = 1; i < hs.nodes; ++i) { float t = i / (float)(hs.nodes - 1), w = hs.width * (1 - t * 0.72f), sh = (std::exp(-(t - 0.26f) * (t - 0.26f) * 45) + 0.5f * std::exp(-(t - 0.66f) * (t - 0.66f) * 60)) * (s % 2 ? 0.8f : 0.3f) * (0.4f + 0.6f * lit);
-                C().Line(p[i - 1].x, p[i - 1].y, p[i].x, p[i].y, Alpha(Mix(base, hl, sh), 1 - t * 0.3f), w); } }                                          // two sheen bands along the length
-        if (hs.root == 0 || hs.root == 1 || hs.root == 2 || hs.root == 6) { V2 a = r.hair[idx[0]][0]; C().Circle(a.x, a.y, 2.8f, bc); C().Circle(a.x + 0.6f, a.y - 0.6f, 1.1f, Mix(bc, Hex(0xFFFFFF), 0.5f)); }   // hair tie
+        for (int grp = 0; grp < hs.groups; ++grp) { bool front = hs.root == 6 || ((hs.root == 2 || hs.root == 4) && grp == 1); if (front != (phase == 1)) continue; int g0 = grp * hs.g;
+            if (hs.root == 4) { V2* p = r.hair[g0];                                                // plait: crossing links along the chain, then a tuft
+                for (int i = 1; i < hs.nodes; ++i) { float t = i / (float)hs.nodes, w = 3.8f * (1 - t * 0.5f); V2 a = p[i - 1], b = p[i]; C().Line(a.x, a.y, b.x, b.y, hd, w * 2 + 1.4f); }
+                for (int i = 1; i < hs.nodes; ++i) { float t = i / (float)hs.nodes, w = 3.8f * (1 - t * 0.5f); V2 a = p[i - 1], b = p[i]; float nx = -(b.y - a.y), ny = b.x - a.x, l = std::sqrt(nx * nx + ny * ny) + 1e-4f, o = (i & 1 ? 1.f : -1.f) * w * 0.45f; nx /= l; ny /= l;
+                    C().Line(a.x + nx * o, a.y + ny * o, b.x - nx * o, b.y - ny * o, i & 1 ? hc : hl, w * 1.15f); }
+                V2 e = p[hs.nodes - 1], e0 = p[hs.nodes - 2]; float dx = e.x - e0.x, dy = e.y - e0.y; C().Circle(e.x, e.y, 2.4f, bc); for (int k = -3; k <= 3; ++k) C().Line(e.x, e.y, e.x + dx * 1.9f + k * 1.2f, e.y + dy * 1.9f + std::fabs((float)k), k & 1 ? hc : hd, 1.1f);
+                continue; }
+            // render strands are interpolated between the simulated guides; each has its own length and offset, and they gather into locks when wet
+            const int K = 5, NS = (hs.g - 1) * K + 1; static V2 rs[(HG - 1) * 5 + 1][HN]; int len[(HG - 1) * 5 + 1];
+            for (int s = 0; s < NS; ++s) { int g = std::min(s / K, hs.g - 2); float a = (s - g * K) / (float)K; a += (std::round(a) - a) * 0.75f * wetD; V2* A = r.hair[g0 + g], *B = r.hair[g0 + g + 1];
+                float ox = (Hash(s * 7 + 3) - 0.5f) * 3.4f * (1 - 0.6f * wetD), oy = (Hash(s * 13 + 1) - 0.5f) * 3.4f * (1 - 0.6f * wetD); len[s] = std::max(2, (int)((0.78f + 0.22f * Hash(s * 5 + 9)) * (hs.nodes - 1)));
+                for (int i = 0; i < hs.nodes; ++i) { float t = i / (float)(hs.nodes - 1); rs[s][i] = { A[i].x + (B[i].x - A[i].x) * a + ox * t, A[i].y + (B[i].y - A[i].y) * a + oy * t }; } }
+            Color body = Mix(hd, hc, 0.30f);                                                       // the mass under the strands
+            for (int g = 1; g < hs.g; ++g) { V2* A = r.hair[g0 + g - 1], *B = r.hair[g0 + g]; for (int i = 1; i < hs.nodes; ++i) { float t = i / (float)(hs.nodes - 1); if (t > 0.86f) break;     // filled guide to guide: one quad per segment
+                C().Quad(A[i - 1].x, A[i - 1].y, B[i - 1].x, B[i - 1].y, B[i].x, B[i].y, A[i].x, A[i].y, Alpha(body, 0.95f - t * 0.4f)); } }
+            const float Lx = 0.53f * r.face, Ly = -0.85f;                                           // light direction in the sprite's (possibly mirrored) frame
+            for (int s = 0; s < NS; ++s) { float sh = (Hash(s * 11 + 2) - 0.5f) * 0.30f, depth = 0.55f + 0.45f * Hash(s * 3 + 7); Color base = Mix(hd, hc, depth);
+                for (int i = 1; i <= len[s]; ++i) { float t = i / (float)(hs.nodes - 1), tl = i / (float)len[s], w = hs.width * (1 - tl * 0.75f) * (1 + 0.35f * wetD);
+                    float dx = rs[s][i].x - rs[s][i - 1].x, dy = rs[s][i].y - rs[s][i - 1].y, l = std::sqrt(dx * dx + dy * dy) + 1e-4f, c = (dx * Lx + dy * Ly) / l;                 // strand tangent against the light:
+                    float diff = std::sqrt(std::max(0.f, 1 - c * c)), c1 = c + sh, s1 = std::pow(std::max(0.f, 1 - c1 * c1), 46.f), c2 = c - 0.38f + sh * 2, s2 = std::pow(std::max(0.f, 1 - c2 * c2), 12.f);   // a tight white lobe and a broad coloured one, shifted per strand
+                    Color col = Mix(Mix(Mix(hd, base, 0.35f + 0.65f * diff), hl, s2 * 0.45f), Hex(0xFFFFFF), s1 * (0.55f + 0.35f * wetD) * depth);
+                    C().Line(rs[s][i - 1].x, rs[s][i - 1].y, rs[s][i].x, rs[s][i].y, Alpha(col, 1 - t * 0.25f), w); } }
+            for (int k = 0; k < 4; ++k) { int s = (int)(Hash(k * 17 + 5) * NS) % NS; float oy = (k & 1 ? -1.f : 1.f) * (3 + 3 * Hash(k)) * (1 - wetD);                                   // flyaways
+                for (int i = 2; i <= len[s]; ++i) { float t = i / (float)(hs.nodes - 1), t0 = (i - 1) / (float)(hs.nodes - 1); C().Line(rs[s][i - 1].x, rs[s][i - 1].y + oy * t0 * t0 * 2.2f, rs[s][i].x, rs[s][i].y + oy * t * t * 2.2f, Alpha(hl, 0.5f * (1 - t * 0.6f)), 0.7f); } }
+            if (hs.root == 0 || hs.root == 1 || hs.root == 2 || hs.root == 6) { V2 a = r.hair[g0 + hs.g / 2][0]; C().Circle(a.x, a.y, 2.8f, bc); C().Circle(a.x + 0.6f * r.face, a.y - 0.6f, 1.1f, Mix(bc, Hex(0xFFFFFF), 0.5f)); }   // hair tie
+        }
     };
+    auto ties = [&]() { Color dk = Mix(bc, Hex(0x000000), 0.4f), lt = Mix(bc, Hex(0xFFFFFF), 0.35f);
+        for (int k = 0; k < r.tieN; ++k) { V2* p = r.tie[k]; for (int i = 1; i < TN; ++i) C().Line(p[i - 1].x, p[i - 1].y, p[i].x, p[i].y, dk, 2.0f);
+            for (int i = 1; i < TN; ++i) C().Line(p[i - 1].x, p[i - 1].y, p[i].x, p[i].y, i & 1 ? bc : lt, 1.1f); C().Circle(p[TN - 1].x, p[TN - 1].y, 1.3f, lt);
+            if (!(k & 1)) { C().Circle(p[0].x, p[0].y, 1.9f, dk); C().Circle(p[0].x, p[0].y, 1.2f, bc); } } };
     C().SetTransform(M);
     blit(SD_BODY, false);
-    strands(0);
+    C().SetTransform(Mnr); strands(0); C().SetTransform(M);
     blit(f, red);
     if (r.spr.ch[f] && (std::fabs(r.jy) > 0.05f || std::fabs(r.jx) > 0.05f)) {                    // chest: redrawn sprung, hinged on its inner upper corner, squashing as it travels
         const int* q = r.spr.chest[f]; float w = (float)(q[2] - q[0]), h = (float)(q[3] - q[1]); D2D1_POINT_2F pv{ (float)q[0], (float)q[1] };
         C().SetTransform(D2D1::Matrix3x2F::Scale(1 + r.jx * 0.02f - r.jy * 0.012f, 1 + r.jy * 0.035f, pv) * D2D1::Matrix3x2F::Skew(0, r.jy * 1.6f, pv) * D2D1::Matrix3x2F::Translation(r.jx * 0.5f, r.jy * 0.45f) * M);
         C().BitmapPx((red ? r.spr.chRed[f] : r.spr.ch[f]).Get(), RF((float)q[0], (float)q[1], w, h)); C().SetTransform(M); }
     for (auto& wd : r.wound) if (wd.t > 0) { float a = std::min(1.f, wd.t / 3), run = (9 - wd.t) * 2.2f; C().Line(wd.x, wd.y, wd.x - 0.5f, wd.y + std::min(9.f, run), Hex(0x8E0A14, a * 0.8f), 1.0f); C().Circle(wd.x, wd.y, 2.1f, Hex(0x7A0811, a)); C().Circle(wd.x + 0.5f, wd.y - 0.4f, 1.0f, Hex(0xD8202A, a)); }
-    if (fi.nTies) for (int k = 0; k < 2; ++k) for (int i = 1; i < 4; ++i) C().Line(r.tie[k][i - 1].x, r.tie[k][i - 1].y, r.tie[k][i].x, r.tie[k][i].y, bc, 1.2f);
-    strands(1);
+    C().SetTransform(Mnr); ties(); strands(1); C().SetTransform(M);
     { // hull over her feet, as layered by the artist. What is under the waterline is seen through the water: drawn in thin rows that shift sideways and sit a little shallower
         const int* b = kSdFrames[SD_HULL].bbox; const int WL = 213; float w = (float)(b[2] - b[0]);
         if (!sim || r.hop > 3 * S || b[3] <= WL) blit(SD_HULL, false);
@@ -1080,10 +1128,10 @@ bool WetRashShot(const std::wstring& path, int scene) {
         G.weather = 0; G.auto_ = true; SideStart(); RedrawWindow(G.h, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW); int hit = -1;
         for (int i = 0; i < 60 * 40 && !SD.over; ++i) { G.t += 1 / 60.f; SideTick(1 / 60.f); if (hit < 0 && (SD.r[1].flash > 0 || SD.r[2].flash > 0)) hit = i; if (hit >= 0 && i > hit + 13) break; }
         ok = hit >= 0; Log("wet-rash qa: hit scene, first hit at frame %d, fx %zu", hit, SD.fx.size()); SD.freeze = true;
-    } else if (scene == 11) { G.weather = 0; SideStart(); SD.freeze = true; SD.sheet = true;
+    } else if (scene >= 11 && scene <= 13) { G.weather = scene == 13 ? 3 : 0; SideStart(); SD.freeze = true; SD.sheet = true;       // hair sheet: settled, a moment later, and in a hurricane
     } else if (scene == 10) { G.mode = Game::RIDER; G.custSel = 4; G.look.style = 2;
     } else if (scene == 3) G.mode = Game::RIDER; else if (scene == 4) G.mode = Game::CONTROLS;
-    for (int i = 0; i < 40; ++i) {              // let the window map and paint a few real frames before reading it back
+    for (int i = 0, nfr = scene == 11 ? 80 : scene == 12 ? 92 : scene == 13 ? 100 : 40; i < nfr; ++i) {              // let the window map and paint a few real frames before reading it back
         MSG m; while (PeekMessageW(&m, nullptr, 0, 0, PM_REMOVE)) { TranslateMessage(&m); DispatchMessageW(&m); }
         if (G.mode == Game::MENU || G.mode == Game::RIDER || G.mode == Game::SIDE) Tick(1 / 60.f); else { G.t += 1 / 60.f; for (auto& q : G.parts) { q.x += q.vx / 60; q.y += q.vy / 60; q.life -= 1 / 60.f; } }
         RedrawWindow(G.h, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW); Sleep(16);

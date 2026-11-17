@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.10.0 (hair and tie systems rebuilt)
+- Hair is now a position-based strand simulation instead of animated curves. Up to 8 guide strands of up to 18
+  nodes per rider, two substeps per frame:
+  - forces: gravity and air drag against the apparent wind, with a travelling turbulence field shared by all
+    strands (so ripples pass through the mass coherently);
+  - constraints: segment length; a rest shape (the direction it leaves the head or its tie is held for the first
+    few segments, then only the style's own springiness and curl); spacing between neighbouring guides, which is
+    what gives the mass volume; collision with the head, her back (the sprite's own silhouette) and the seat, with
+    friction, strands stacking in layers;
+  - simulated in an upright frame that travels with the rider, so hops, waves, lunges and pose changes reach the
+    hair as real motion of its roots.
+- Rendering: about 36 strands interpolated between the guides, each with its own length and offset; lit from the
+  strand tangent with a tight white highlight and a broad coloured one, shifted per strand; filled mass under
+  them; flyaways. Wet hair darkens, gathers into locks, gets heavier and drips from the ends.
+- Bikini ties use the same solver: two strings per tie point (all tie points in the frame, not just the first),
+  drawn as ribbons with a knot and end beads, colliding with the body.
+- All ten styles retuned and lengthened for the new system.
+- QA scenes: --uishot 52 (hair sheet a few frames later), 53 (hair sheet in a hurricane).
+
 ## 0.9.0 (hair, reflections, refraction, beads)
 - Hair: ten styles (long ponytail, extra-long high ponytail, twin tails, loose straight, loose wavy, curls, long
   braid, twin braids, side ponytail, short bob), up to hip length and beyond. The mass is filled between
