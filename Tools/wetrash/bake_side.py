@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Bakes the side-view (Spear Run) art into atlases + a data header.  bake_side.py <psd dir> <res dir> <header>
-# Needs psd-tools, numpy, scipy, Pillow. colour atlas: 5x3 cells of 318x237; mask atlas: R bikini, G head/hair, B ties.
+# Needs psd-tools, numpy, scipy, Pillow. colour atlas: 5x3 cells of 318x237; mask atlas: R bikini, G head/hair, B do-not-tint (spear, handle, grips).
 import sys, numpy as np
 from psd_tools import PSDImage
 from PIL import Image
@@ -13,7 +13,7 @@ def layers(name):
         if t is not None and l.bbox[2] > l.bbox[0]: im.paste(t.convert('RGBA'), (l.bbox[0], l.bbox[1]))
         out[l.name.lower()] = np.array(im)
     return out
-F, C, S, T, HP, EX = (layers(n) for n in ('frames', 'clothes', 'sculpts', 'ties', 'handle_points', 'exhaust'))
+F, C, S, T, HP, EX, DT = (layers(n) for n in ('frames', 'clothes', 'sculpts', 'ties', 'handle_points', 'exhaust', 'donttint'))
 ORDER = ['ani1', 'ani2', 'ani3', 'ani4', 'ani5', 'throw1', 'throw2', 'throw3', 'throw4', 'ski_body', 'ski_hull', 'ski_handle', 'ski_handle_grips', 'spear']
 ENUM = ['SD_SIT', 'SD_A2', 'SD_A3', 'SD_A4', 'SD_TUCK', 'SD_T1', 'SD_T2', 'SD_T3', 'SD_T4', 'SD_BODY', 'SD_HULL', 'SD_HANDLE', 'SD_GRIPS', 'SD_SPEAR']
 col = Image.new('RGBA', (CW * 5, CH * 3), (0, 0, 0, 0)); msk = Image.new('RGB', (CW * 5, CH * 3), (0, 0, 0)); rows = []
@@ -27,7 +27,8 @@ def ends(a):                       # the two ends of a drawn line mask (principa
 for i, n in enumerate(ORDER):
     f = F[n]; ox, oy = (i % 5) * CW, (i // 5) * CH; col.paste(Image.fromarray(f), (ox, oy))
     m = np.zeros((CH, CW, 3), np.uint8)
-    if i < 9: m[..., 0] = (C[n][..., 3] > 0) * 255; m[..., 1] = (S[n][..., 3] > 0) * 255; m[..., 2] = (T[n][..., 3] > 0) * 255
+    if i < 9: m[..., 0] = (C[n][..., 3] > 0) * 255; m[..., 1] = (S[n][..., 3] > 0) * 255
+    if n in DT: m[..., 2] = (DT[n][..., 3] > 0) * 255          # the tie points only feed the header; B carries the artist's do-not-tint mask
     msk.paste(Image.fromarray(m), (ox, oy))
     ys, xs = np.nonzero(f[..., 3]); bb = (xs.min(), ys.min(), xs.max() + 1, ys.max() + 1)
     head = (0, 0, 0); tie = [(0, 0)]; nt = 0

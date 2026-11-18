@@ -431,6 +431,17 @@ void Canvas::Quad(float x0, float y0, float x1, float y1, float x2, float y2, fl
     sk->BeginFigure({ x0, y0 }, D2D1_FIGURE_BEGIN_FILLED); sk->AddLine({ x1, y1 }); sk->AddLine({ x2, y2 }); sk->AddLine({ x3, y3 }); sk->EndFigure(D2D1_FIGURE_END_CLOSED); sk->Close();
     rt_->FillGeometry(g.Get(), Brush(c));
 }
+// One filled polygon (winding fill, so a folded outline still fills solid). Far cheaper than a quad or a gradient rectangle per column.
+static ComPtr<ID2D1PathGeometry> PolyGeo(const D2D1_POINT_2F* p, int n) {
+    ComPtr<ID2D1PathGeometry> g; ComPtr<ID2D1GeometrySink> sk; if (n < 3 || FAILED(g_d2d->CreatePathGeometry(&g)) || FAILED(g->Open(&sk))) return nullptr;
+    sk->SetFillMode(D2D1_FILL_MODE_WINDING); sk->BeginFigure(p[0], D2D1_FIGURE_BEGIN_FILLED); sk->AddLines(p + 1, (UINT32)(n - 1)); sk->EndFigure(D2D1_FIGURE_END_CLOSED); sk->Close(); return g;
+}
+void Canvas::Poly(const D2D1_POINT_2F* p, int n, Color c) { if (auto g = PolyGeo(p, n)) rt_->FillGeometry(g.Get(), Brush(c)); }
+void Canvas::PolyGrad(const D2D1_POINT_2F* p, int n, Color top, Color bot, float y0, float y1) {
+    auto g = PolyGeo(p, n); if (!g) return; D2D1_GRADIENT_STOP st[2] = { { 0.f, top }, { 1.f, bot } }; ComPtr<ID2D1GradientStopCollection> sc; ComPtr<ID2D1LinearGradientBrush> br;
+    if (FAILED(rt_->CreateGradientStopCollection(st, 2, &sc)) || FAILED(rt_->CreateLinearGradientBrush(D2D1::LinearGradientBrushProperties({ 0, y0 }, { 0, y1 }), sc.Get(), &br))) { rt_->FillGeometry(g.Get(), Brush(top)); return; }
+    rt_->FillGeometry(g.Get(), br.Get());
+}
 void Canvas::Logo(float cx, float cy, float s) {
     // Squircle with the magenta -> violet -> cyan sweep, a halo arc and a four-point sparkle.
     RectF r = RF(cx - s / 2, cy - s / 2, s, s);

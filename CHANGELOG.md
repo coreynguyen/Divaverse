@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.11.0 (Spear Run: speed, hair physics, artist fixes)
+- Do-not-tint mask (donttint.psd): the spear, steering column and grips, including the ones painted into the throw
+  frames, keep their painted colours whatever the skin tone. Baked into the blue channel of the side mask atlas.
+- Riding / tuck frames: steering column and grips are drawn behind her. In the throw frames the column stays in
+  front and follows her hand as before.
+- Speed. The mode was issuing, per frame, about 760 gradient brushes (one per 5 px water column), about 360 path
+  geometries (hair fill) and about 2000 filled ellipses (spray, foam, beads). Now: each water layer is one gradient
+  polygon, the hair mass is one polygon per group, and every droplet, foam fleck, stain and bead is a pre-baked
+  disc drawn as a bitmap. Particle cap 1800 -> 1000, fewer render strands (drawn thicker), coarser reflection
+  bands. Measured under Wine's software Direct2D, sunny scene: 346 ms -> about 165 ms per frame of draw calls;
+  not measured on a GPU. F3 in Spear Run shows the frame cost.
+- Hair, ties, beads and chest motion now advance by real elapsed time, not by a fixed 1/60 s per rendered frame,
+  so a low frame rate no longer plays them in slow motion.
+- Hair physics: air drag grows with the square of the relative wind plus a small linear term (hair that is only
+  falling or swinging keeps its weight; headwind and gusts take hold), slow gusts instead of constant strong
+  turbulence, flutter only toward the tips, internal friction along the strand, gravity matched to the hop.
+  Loose styles and the bob use 12 guide strands, so they read as a mass, not a rope.
+- QA: --uishot 54 (one large rider who hops and throws; DIVAVERSE_QA_FRAMES / DIVAVERSE_QA_STYLE pick the frame and
+  the hair style, for filmstrips), per-section frame timings in the log.
+
 ## 0.10.0 (hair and tie systems rebuilt)
 - Hair is now a position-based strand simulation instead of animated curves. Up to 8 guide strands of up to 18
   nodes per rider, two substeps per frame:

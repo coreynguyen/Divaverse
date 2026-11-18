@@ -82,6 +82,8 @@ public:
     void BitmapSrc(ID2D1Bitmap* b, const RectF& dst, const RectF& src, float opacity = 1.f);    // part of a bitmap, nearest-neighbour
     void BitmapPx(ID2D1Bitmap* b, const RectF& dst, float opacity = 1.f);                       // nearest-neighbour (pixel art)
     void Quad(float x0, float y0, float x1, float y1, float x2, float y2, float x3, float y3, Color c);
+    void Poly(const D2D1_POINT_2F* p, int n, Color c);                                            // filled polygon, one geometry
+    void PolyGrad(const D2D1_POINT_2F* p, int n, Color top, Color bot, float y0, float y1);       // the same with a vertical gradient between y0 and y1
     void Logo(float cx, float cy, float size);                             // the Divaverse mark, drawn live
 
 private:
