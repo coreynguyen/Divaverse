@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.12.0 (hair: weight)
+Measured first: --uishot 54 now logs the tip of a guide strand every frame through a rest / hop / landing / throw
+script, and DIVAVERSE_QA_HAIR switches parts of the solver off. Findings and fixes:
+- A resting ponytail was whipping through +-30 px with nothing happening (tip height sd 32 px). Switching the
+  rest-shape term off dropped that to 3 px: steering each node toward the continuation of the previous segment
+  feeds back along the chain. Now only the first seven nodes are steered, toward a fixed direction that fades out,
+  and the rest of the strand is free except for a limit on how sharply it may fold. Resting sd is now about 1 px.
+- A hop made the tip whip over the top of her head. Cause: the length constraint moved the lower node 88 % and
+  the upper 12 %, which is a chain whose mass tapers 7:1 per link, i.e. a bullwhip. Equal masses, six iterations.
+  The tip no longer rises above the root after a landing.
+- Hair drifted like something light. Drag per unit of weight cut to a sixth and gravity raised (2800 px/s^2), with
+  a faster apparent wind so the lean is kept (22 to 41 degrees at rest depending on style); internal friction
+  0.12 -> 0.03 per substep. It now swings and settles in 1.1 to 1.4 s after a landing instead of creeping.
+- Collisions eased out over a few steps instead of teleporting a node up to 22 px (which kicked its neighbours).
+- Her motion reaches the roots through a short low-pass, and only 60 % of the vertical part, so the hair does not
+  go weightless for the length of a hop.
+- Curl is no longer simulated; wavy and curly styles are drawn as waves around the simulated strand.
+- Drawing: strands are spread across the bundle by a profile (nothing at the tie, widest a quarter of the way
+  down, tapering to a point) and gather into locks toward the ends; the mass under them is opaque.
+
 ## 0.11.0 (Spear Run: speed, hair physics, artist fixes)
 - Do-not-tint mask (donttint.psd): the spear, steering column and grips, including the ones painted into the throw
   frames, keep their painted colours whatever the skin tone. Baked into the blue channel of the side mask atlas.

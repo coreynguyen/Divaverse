@@ -1001,7 +1001,7 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE, PWSTR, int) {
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);   // also in manifest
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     LogInit();
-    Log("Divaverse 0.11.0 starting");
+    Log("Divaverse 0.12.0 starting");
     int argc = 0; wchar_t** argv = CommandLineToArgvW(GetCommandLineW(), &argc);
     App app; g_app = &app;
     int rc = app.Run(hi, argc, argv);
