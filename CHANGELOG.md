@@ -9,11 +9,16 @@ script, and DIVAVERSE_QA_HAIR switches parts of the solver off. Findings and fix
   and the rest of the strand is free except for a limit on how sharply it may fold. Resting sd is now about 1 px.
 - A hop made the tip whip over the top of her head. Cause: the length constraint moved the lower node 88 % and
   the upper 12 %, which is a chain whose mass tapers 7:1 per link, i.e. a bullwhip. Equal masses, six iterations.
-  The tip no longer rises above the root after a landing.
+  The tip stays below the root through the landing and the throw (except the extra-long high ponytail, which reaches level).
 - Hair drifted like something light. Drag per unit of weight cut to a sixth and gravity raised (2800 px/s^2), with
   a faster apparent wind so the lean is kept (22 to 41 degrees at rest depending on style); internal friction
-  0.12 -> 0.03 per substep. It now swings and settles in 1.1 to 1.4 s after a landing instead of creeping.
+  0.12 -> 0.03 per substep. It now swings and settles in 0.85 to 1.3 s after a landing and throw instead of creeping.
 - Collisions eased out over a few steps instead of teleporting a node up to 22 px (which kicked its neighbours).
+- After a throw the hair stayed knotted behind her head for good. Two causes, both visible in a dump of the guide
+  nodes: the throw frames put her head 73 px further forward, so the roots teleported there and back within ten
+  frames; and every contact damped the node's whole velocity, six iterations a substep, which froze the knot
+  where it lay. Now the hair is carried with a large pose jump, and a contact cancels only motion into the
+  surface, so hair slides down her back under its weight. The spear and grips she holds no longer count as body.
 - Her motion reaches the roots through a short low-pass, and only 60 % of the vertical part, so the hair does not
   go weightless for the length of a hop.
 - Curl is no longer simulated; wavy and curly styles are drawn as waves around the simulated strand.

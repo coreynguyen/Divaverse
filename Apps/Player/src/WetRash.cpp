@@ -631,13 +631,13 @@ void BakeSide(const Look& lk, SideSpr& sp) {
     enum { M_NONE, M_SKIN, M_BIK, M_HAIR, M_SKI };
     for (int i = 0; i < SD_FRAMES; ++i) {
         const int* b = kSdFrames[i].bbox; int w = b[2] - b[0], h = b[3] - b[1], ox = (i % 5) * SD_CW + b[0], oy = (i / 5) * SD_CH + b[1]; size_t N = (size_t)w * h;
-        std::vector<float> col(N * 3, 0), hg(N, 0), lum(N, 0); std::vector<uint8_t> al(N, 0), mat(N, 0), px(N * 4, 0), rd(N * 4, 0), wt(N * 4, 0);
+        std::vector<float> col(N * 3, 0), hg(N, 0), lum(N, 0); std::vector<uint8_t> al(N, 0), mat(N, 0), px(N * 4, 0), rd(N * 4, 0), wt(N * 4, 0), nt(N, 0);
         for (int y = 0; y < h; ++y) for (int x = 0; x < w; ++x) {
             const uint8_t* s = &g_sAtlas.px[((size_t)(oy + y) * g_sAtlas.w + ox + x) * 4], *m = &g_sMasks.px[((size_t)(oy + y) * g_sMasks.w + ox + x) * 4]; size_t k = (size_t)y * w + x;
             float a = s[3] / 255.f; if (a <= 0) continue;
             if (i == SD_T4) { int cx = b[0] + x, cy = b[1] + y; if ((cx >= 146 && cy <= 40) || (cx >= 206 && cy <= 58)) continue; }    // the painted spear leaves as a real projectile
             float c[3] = { s[2] / a, s[1] / a, s[0] / a }, l = 0.3f * c[0] + 0.59f * c[1] + 0.11f * c[2]; int mt = M_SKI;
-            if (m[0] > 127) { }                                                                                    // the artist's do-not-tint mask: spear, steering column, grips keep their painted colours
+            if (m[0] > 127) { if (i < SD_BODY) nt[k] = 1; }                                                                                    // the artist's do-not-tint mask: spear, steering column, grips keep their painted colours
             else if (i >= SD_BODY) { if (i != SD_SPEAR && c[0] > c[1] * 1.7f && c[0] > c[2] * 1.7f) { float q = c[0] / 200.f; for (int j = 0; j < 3; ++j) c[j] = std::min(255.f, ch(ski, j) * q); } }
             else if (m[1] > 127) { mt = M_HAIR; float q = 0.30f + 0.70f * std::pow(l / 150.f, 1.3f) + ((x * 3 + y) % 4 == 0 ? 0.10f : 0); for (int j = 0; j < 3; ++j) c[j] = std::min(255.f, ch(hair, j) * q); }
             else if (m[2] > 127) { mt = M_BIK; float q = l / 120.f; for (int j = 0; j < 3; ++j) c[j] = std::min(255.f, ch(bik, j) * (0.25f + 0.75f * q)); }
@@ -663,7 +663,7 @@ void BakeSide(const Look& lk, SideSpr& sp) {
             o[0] = (uint8_t)(c[2] * a); o[1] = (uint8_t)(c[1] * a); o[2] = (uint8_t)(c[0] * a); o[3] = al[k];
             r2[0] = (uint8_t)(c[2] * 0.3f * a); r2[1] = (uint8_t)(c[1] * 0.3f * a); r2[2] = (uint8_t)(std::min(255.f, c[0] * 0.5f + 150) * a); r2[3] = al[k];     // hit flash copy
         }
-        sp.f[i] = C().MakeBitmap(px.data(), w, h); sp.wet[i] = C().MakeBitmap(wt.data(), w, h); sp.am[i] = al;
+        sp.f[i] = C().MakeBitmap(px.data(), w, h); sp.wet[i] = C().MakeBitmap(wt.data(), w, h); sp.am[i] = al; for (size_t k = 0; k < N; ++k) if (nt[k]) sp.am[i][k] = 0;      // the spear and grips she holds are not part of her body for hair, ties and beads
         if (i >= SD_BODY) continue;
         sp.red[i] = C().MakeBitmap(rd.data(), w, h);
         // chest: the upper connected piece of the bikini mask plus the skin just around it, cut out so it can be sprung
@@ -703,7 +703,7 @@ const HairStyle kStyle[HSTYLES] = {
 struct Bead { float x, y, vy, size, stick, age, y0; int id; };
 struct Wound { float x = 0, y = 0, t = 0; };
 struct SRider { float x = 0, hop = 0, vy = 0, duck = 0, throwT = -1, flash = 0, cool = 0, hp = 3, out = 0, aiT = 1, aiX = 0, face = 1, wet = 0.3f, jy = 0, jvy = 0, jx = 0, jvx = 0, py = 0, pvy = 0, bleed = 0, ays = 0, ha = 0.5f, hav = 0; bool threw = false, bot = true, pinit = false; float soak = 0; std::vector<Bead> beads;
-    Look look; SideSpr spr; V2 hair[HG][HN], hairP[HG][HN], tie[TMAX][TN], tieP[TMAX][TN], hO = { 0, 0 }; bool tinit[TMAX] = {}, hOk = false; int tieN = 0; bool init = false; int istyle = -1; Wound wound[5]; std::wstring name; };
+    Look look; SideSpr spr; V2 hair[HG][HN], hairP[HG][HN], tie[TMAX][TN], tieP[TMAX][TN], hO = { 0, 0 }, hRoot = { 0, 0 }; bool tinit[TMAX] = {}, hOk = false; int tieN = 0; bool init = false; int istyle = -1; Wound wound[5]; std::wstring name; };
 struct Spear { float x, y, vx, vy; int owner; bool live; };
 enum { FX_DROP, FX_MIST, FX_BLOOD, FX_FOAM, FX_STAIN };
 struct Fx { float x, y, vx, vy, life, max, size; int kind; uint32_t col; };
@@ -834,11 +834,14 @@ void SideDraw(SRider& r, float sx, float base, float S, float rot, bool sim) {
         static float hp[8] = { 1.0f, 0.03f, 0.0020f, 880, 2800, 25, 0.5f, 6 }; static bool hpInit = false;        // linear drag, internal friction, quadratic drag, headwind, gravity, root-motion smoothing rate
         if (!hpInit) { hpInit = true; if (const wchar_t* e = _wgetenv(L"DIVAVERSE_QA_HP")) swscanf(e, L"%f,%f,%f,%f,%f,%f,%f,%f", &hp[0], &hp[1], &hp[2], &hp[3], &hp[4], &hp[5], &hp[6], &hp[7]); }
         static int dbg = _wgetenv(L"DIVAVERSE_QA_HAIR") ? _wtoi(_wgetenv(L"DIVAVERSE_QA_HAIR")) : 0;     // QA: 1 no collision, 2 no volume, 4 still air, 8 no rest shape
-        auto collide = [&](V2& p, V2& q, float m) { if (dbg & 1) return; V2 s = dn(p); /* m: how far off the surface this strand rides, so the layers stack into a thickness */ bool hit = false; float ex = s.x - hx, ey = s.y - hy, e = std::sqrt(ex * ex + ey * ey);
-            if (e < hr * 0.97f + m * 0.6f && e > 1e-3f) { s.x = hx + ex / e * (hr * 0.97f + m * 0.6f); s.y = hy + ey / e * (hr * 0.97f + m * 0.6f); hit = true; }
-            if (alphaAt(f, { s.x + m, s.y })) for (int k = 1; k <= 22; ++k) if (!alphaAt(f, { s.x + m - k, s.y })) { s.x -= std::min(k - 0.4f, 3.f); hit = true; break; }                     // off her back: out toward behind her
-            if (alphaAt(SD_BODY, s)) for (int k = 1; k <= 12; ++k) if (!alphaAt(SD_BODY, { s.x, s.y - k })) { s.y -= std::min(k - 0.4f, 3.f); hit = true; break; }         // and it lies on the seat
-            if (hit) { V2 n = up(s); q = { n.x - (p.x - q.x) * 0.55f, n.y - (p.y - q.y) * 0.55f }; p = n; } };                                             // friction where it touches
+        // Collision keeps a node out of the head, off her back and on the seat. It only cancels motion INTO the surface; along the surface the node stays free, so hair
+        // slides down her back under its weight. (Measured: damping the whole velocity at every contact, six iterations a substep, froze a knot in place for good.)
+        auto collide = [&](V2& p, V2& q, float m) { if (dbg & 1) return; V2 s = dn(p), s0 = s; bool back = false, seat = false; float ex = s.x - hx, ey = s.y - hy, e = std::sqrt(ex * ex + ey * ey);
+            if (e < hr * 0.97f + m * 0.6f && e > 1e-3f) { s.x = hx + ex / e * (hr * 0.97f + m * 0.6f); s.y = hy + ey / e * (hr * 0.97f + m * 0.6f); }
+            if (alphaAt(f, { s.x + m, s.y })) for (int k = 1; k <= 22; ++k) { if (!alphaAt(f, { s.x + m - k, s.y })) { s.x -= std::min(k - 0.4f, 3.f); back = true; break; } if (k == 22) { s.x -= 3; back = true; } }
+            if (alphaAt(SD_BODY, s)) for (int k = 1; k <= 12; ++k) if (!alphaAt(SD_BODY, { s.x, s.y - k })) { s.y -= std::min(k - 0.4f, 3.f); seat = true; break; }
+            if (s.x == s0.x && s.y == s0.y) return; V2 n = up(s), d = { n.x - p.x, n.y - p.y }; p = n; q.x += d.x; q.y += d.y;                    // carried out with its velocity intact...
+            if (back && p.x - q.x > 0) q.x = p.x; if (seat && p.y - q.y > 0) q.y = p.y; };                                                     // ...minus the part heading into her
         V2 O = { r.face * sx / S, (base - r.hop) / S }; if (!r.hOk || r.istyle != r.look.style) { r.hO = O; r.hOk = true; r.init = false; r.istyle = r.look.style; for (bool& b : r.tinit) b = false; }
         V2 Os = { r.hO.x + (O.x - r.hO.x) * std::min(1.f, dt * hp[5]), r.hO.y + (O.y - r.hO.y) * std::min(1.f, dt * hp[5]) }, dO = { std::clamp(Os.x - r.hO.x, -30.f, 30.f), std::clamp(Os.y - r.hO.y, -30.f, 30.f) * 0.6f }; r.hO = Os;      // her motion reaches the hair through her neck, not as a hard step
         const int NG = hs.groups * hs.g, nsub = std::clamp((int)std::lround(dt * 120), 1, 4); const float h = dt / nsub, gustF = 0.72f + 0.56f * N2(G.t * 0.45f + r.x * 3, 5.f);                 // slow gusts on top of the headwind
@@ -864,7 +867,7 @@ void SideDraw(SRider& r, float sx, float base, float S, float rot, bool sim) {
         // +-30 px with nothing happening. So: only the first three nodes are steered, toward a fixed direction (where the hair leaves the head or its tie), and further
         // down the strand is free except that it may not fold sharper than its style allows. Curl is not simulated at all; it is drawn around the simulated strand.
         auto shape = [&](V2* p, V2* q, int n, V2 root, float th0, float seg, float stiffRoot, float stiff, bool col, float m) {
-            p[0] = root; V2 d0 = { -std::cos(th0), std::sin(th0) }; const float hold[8] = { 0, 1.f, 0.5f, 0.3f, 0.18f, 0.10f, 0.05f, 0.02f }, minFold = std::min(0.97f, 0.72f + stiff * 2.2f);
+            p[0] = root; V2 d0 = { -std::cos(th0), std::sin(th0) }; const float hold[8] = { 0, 1.f, 0.5f, 0.3f, 0.18f, 0.10f, 0.05f, 0.02f }, minFold = std::min(0.985f, 0.91f + stiff * 0.7f);
             for (int i = 1; i < n; ++i) {
                 if (i <= 7 && !(dbg & 8)) { float st = stiffRoot * hold[i];                 // a fixed direction, fading out along the first third: this is what bends the strand into an arc instead of a rod
                     p[i].x += (p[i - 1].x + d0.x * seg - p[i].x) * st; p[i].y += (p[i - 1].y + d0.y * seg - p[i].y) * st; }
@@ -874,6 +877,9 @@ void SideDraw(SRider& r, float sx, float base, float S, float rot, bool sim) {
                 if (col && i >= 2) collide(p[i], q[i], m); } };
         auto lay = [&](V2* p, V2* q, int n, V2 root, float th0, float seg) { float th = th0 * 0.5f + 0.75f; for (int i = 0; i < n; ++i) p[i] = q[i] = { root.x - std::cos(th) * seg * i, root.y + std::sin(th) * seg * i }; };
         V2 ra[HG]; float rth[HG]; for (int g = 0; g < NG; ++g) { rootOf(g, ra[g], rth[g]); if (!r.init) lay(r.hair[g], r.hairP[g], hs.nodes, ra[g], rth[g], hs.seg); }
+        if (r.init && NG > 0) { V2 d = { ra[0].x - r.hRoot.x, ra[0].y - r.hRoot.y }; if (std::fabs(d.x) + std::fabs(d.y) > 9)                                    // a pose change moved her head a long way in one frame (the throw): the hair travels with it
+            for (int g = 0; g < NG; ++g) for (int i = 1; i < hs.nodes; ++i) { r.hair[g][i].x += d.x * 0.9f; r.hair[g][i].y += d.y * 0.9f; r.hairP[g][i].x += d.x * 0.9f; r.hairP[g][i].y += d.y * 0.9f; } }
+        if (NG > 0) r.hRoot = ra[0];
         int nt = std::min(fi.nTies, TMAX / 2); V2 ta[TMAX]; for (int k = 0; k < nt * 2; ++k) { ta[k] = up({ fi.ties[k / 2][0], fi.ties[k / 2][1] }); if (!r.tinit[k]) { lay(r.tie[k], r.tieP[k], TN, ta[k], 1.3f + (k & 1) * 0.5f, 2.6f); r.tinit[k] = true; } }
         r.init = true;
         for (int sub = 0; sub < nsub; ++sub) {
@@ -1003,7 +1009,7 @@ void SideRender(float W, float H) {
         if (n == 40) r.vy = 760 * S2; if (r.hop > 0 || r.vy != 0) { r.hop += r.vy / 60; r.vy -= 1700 * S2 / 60; if (r.hop <= 0) { r.hop = 0; r.vy = 0; r.wet = 1; } }
         if (n == 100) r.throwT = 0; if (r.throwT >= 0) { r.throwT += 1 / 60.f; if (r.throwT > 0.62f) r.throwT = -1; }
         SideDraw(r, W * 0.55f, H * 0.86f, S2, 0, true); c.Text(Fmt(L"frame %d", n), RF(20, 16, 300, 30), 22, Hex(0xFFFFFF), 0, true);
-        { const HairStyle& hs = kStyle[r.look.style % HSTYLES]; int g = hs.g / 2; V2 a = r.hair[g][0], b = r.hair[g][hs.nodes - 1], m = r.hair[g][hs.nodes / 2]; Log("hairlog %d hop %.1f tip %.1f %.1f mid %.1f %.1f", n, r.hop / S2, b.x - a.x, b.y - a.y, m.x - a.x, m.y - a.y); }
+        { const HairStyle& hs = kStyle[r.look.style % HSTYLES]; int g = hs.g / 2; V2 a = r.hair[g][0], b = r.hair[g][hs.nodes - 1], m = r.hair[g][hs.nodes / 2]; Log("hairlog %d hop %.1f tip %.1f %.1f mid %.1f %.1f", n, r.hop / S2, b.x - a.x, b.y - a.y, m.x - a.x, m.y - a.y); if (n % 60 == 0 || n == 130) for (int gg = 0; gg < hs.g; gg += hs.g / 2) { std::string o; for (int i = 0; i < hs.nodes; ++i) { char bf[40]; snprintf(bf, 40, " (%.0f,%.0f)", r.hair[gg][i].x, r.hair[gg][i].y); o += bf; } Log("hairshape n %d g %d frame %d head %.0f %.0f %.0f:%s", n, gg, SideFrame(r), kSdFrames[SideFrame(r)].head[0], kSdFrames[SideFrame(r)].head[1], kSdFrames[SideFrame(r)].head[2], o.c_str()); } }
         return; }
     if (SD.sheet) {                                                                                    // QA: every hair style side by side
         c.GradRR(RF(0, 0, W, H), 0, Hex(p.skyT), Hex(p.skyB), true);
