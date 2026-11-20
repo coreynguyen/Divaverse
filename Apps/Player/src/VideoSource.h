@@ -68,12 +68,15 @@ public:
     struct DecodeInfo { bool d3dManaged; int gpuFrames, cpuFrames, streamChanges; uint64_t loops, fed, emitted, tsAnomalies; const char* stage; float feedMs; };
     DecodeInfo Info() const;
     void SetLowLatency(bool on) { lowLatency_ = on; }      // call before Open
+    // Placement the source itself knows (plugin clips): false = use the clip description.
+    bool Authored(float& anchorU, float& groundV, double& ppm) const;
 
 private:
     struct Impl; Impl* d = nullptr;
     void ThreadMain();
     bool InitOnThread(std::wstring& err);
     void DecodeLoop();
+    bool InitPlugin(std::wstring& err); void PluginLoop();      // clip served by a content plugin (DV_PLUGINS)
     bool Upload(FrameSlot& s, int plane, void* mfframe);
     bool EnsurePlanes(Planes& p, int w, int h, bool nv12);
 

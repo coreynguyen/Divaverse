@@ -53,6 +53,7 @@ private:
     void AddManifest(const std::wstring& dir);
     void AddMkv(const std::wstring& file, const ClipDesc* legacy, const Show* show, const std::wstring& artDir);
     void Group();
+    void AddPlugins();                            // items offered by content plugins (DV_PLUGINS)
     void Worker(HWND notify, UINT msg, int gen);
     std::vector<LibClip> clips_; std::vector<LibDiva> divas_; std::vector<LibProblem> problems_;
     std::vector<Show> shows_;                     // legacy manifests met during the scan (diva names / profiles)

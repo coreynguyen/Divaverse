@@ -70,6 +70,21 @@ jobs:
           if (Test-Path $log) { Get-Content $log -Tail 40 | ForEach-Object { Write-Output "log: $_" } }
           exit $fail
 
+      - name: Content plugin interface (sample plugin built with MSVC, played, removed)
+        shell: pwsh
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          $dir = Split-Path $env:EXE; New-Item -ItemType Directory -Force "$dir\Plugins" | Out-Null
+          cmd /c "`"$vs\VC\Auxiliary\Build\vcvars64.bat`" >nul && cl /nologo /LD /O2 /W3 Tools\plugin_sample\sample_plugin.c /I Apps\Player\src /Fe:`"$dir\Plugins\SamplePlugin.dll`""
+          if ($LASTEXITCODE -ne 0) { Write-Output "::error::sample plugin did not build"; exit 1 }
+          $out = "$pwd\st_plugin.bmp"
+          $p = Start-Process -FilePath $env:EXE -ArgumentList @('--selftest', "`"$out`"", '--selftest-seconds', '7', '--sw', '--layered', '--expect', 'layout=dual', '--expect', 'loops=1', 'plugin://sample/bounce') -PassThru -Wait -NoNewWindow
+          $j = if (Test-Path "$out.json") { (Get-Content "$out.json" -Raw) -replace "`r?`n", ' ' } else { 'no report' }
+          if ($p.ExitCode -eq 0) { Write-Output "::notice::PASS plugin_play $j" } else { Write-Output "::error::FAIL plugin_play (rc=$($p.ExitCode)) $j"; exit 1 }
+          Remove-Item -Recurse -Force "$dir\Plugins"
+          $p = Start-Process -FilePath $env:EXE -ArgumentList @('--selftest', "`"$pwd\st_noplugin.bmp`"", '--selftest-seconds', '3', '--sw', '--layered', 'plugin://sample/bounce') -PassThru -Wait -NoNewWindow
+          if ($p.ExitCode -ne 0) { Write-Output "::notice::PASS plugin_removed (rc=$($p.ExitCode))" } else { Write-Output "::error::FAIL plugin_removed: item still played"; exit 1 }
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:

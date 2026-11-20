@@ -44,6 +44,14 @@ Settings > Diagnostics: copy report, export diagnostics (report, logs, settings,
 performance overlay (also a shortcut, default Ctrl+Alt+D), and a 20 s GPU decode trace that logs every decoder call
 and then exports the folder. CI (`.github/workflows/windows.yml`) builds with MSVC and runs smoke tests on Windows.
 
+## Content plugins
+`DvPlugin.h` is a self-contained C interface: `DvPluginInit` returns `scan / open / read / close`. The host side is
+`Plugin.cpp` (loader, `plugin://<plugin id>/<item id>` addresses) plus three guarded call sites: `VideoSource`
+(plugin frames are converted to the same colour + alpha plane pairs the decoder path produces, so the renderer, hit
+mask, clock and seek are shared), `Library::AddPlugins` (items become clips grouped by the plugin's group id) and
+`DecodePoster` (thumbnails). Divaverse contains no knowledge of any plugin's content or format; plugins live outside
+this repository. Removing support: delete the DLL (run time) or build with `DV_PLUGINS=0` (compile time).
+
 ## Not implemented
 Content Workshop (PNG import, calibration studio, encoding, MKV metadata baking), multiple performers,
 GPU-decode hit mask and zero-copy pipeline, desktop behaviours (standing on windows, pose transitions),

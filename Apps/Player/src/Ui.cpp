@@ -40,6 +40,7 @@ struct UiState {
     std::wstring search; bool searchFocus = false; int filter = 0; std::wstring detailKey; bool infoOpen = false;
     std::unordered_map<std::wstring, ComPtr<ID2D1Bitmap>> songArt; int plSel = -1, sort = 0;
     std::vector<ComPtr<ID2D1Bitmap>> banners; std::wstring tagText; bool tagFocus = false;
+    std::wstring albumOpen;                              // Music -> Albums: the album whose songs are listed ("" = the grid)
     int hkCapture = -1;                                  // Settings -> Shortcuts: action waiting for a key combination
     std::wstring plName; bool plFocus = false;           // On Stage -> name for "save the queue as a playlist"
     struct Loot { std::wstring key, name; int fresh; bool wholeNew; }; std::vector<Loot> loot; double lootT = 0; int lootGen = -1; bool lootBurst = false;
@@ -824,6 +825,7 @@ float PageMusic(const RectF& a) {
     y += 96;
     Segmented(410, RF(a.left, y, 440, 38), { L"Generated", L"Albums", L"Songs", L"Playlists" }, U.musicTab, [](int k) { U.musicTab = k; U.scroll[PG_MUSIC] = 0; UiInvalidate(); });
     if (U.musicTab > 0) {
+        if (RW(a) < 440 + 24 + 560) y += 46;             // not enough room beside the tabs: the options get their own row
         C().Text(L"Shuffle", RF(a.right - 130, y, 70, 38), 13, P().dim, 2);
         Toggle(451, a.right, y + 19, M.Shuffle(), [] { g_app->set.musicShuffle = !g_app->music.Shuffle(); g_app->music.SetShuffle(g_app->set.musicShuffle); g_app->set.Save(); UiInvalidate(); });
         C().Text(L"Crossfade", RF(a.right - 560, y, 90, 38), 13, P().dim, 2);
@@ -853,12 +855,44 @@ float PageMusic(const RectF& a) {
     Button(453, RF(a.left + 160, y, 124, 36), L"Add files", I_ADD, B_GHOST, [] {
         auto p = PickFiles(L"Audio (*.mp3;*.m4a;*.aac;*.wav;*.flac;*.wma;*.ogg;*.opus)\0*.mp3;*.m4a;*.aac;*.wav;*.flac;*.wma;*.ogg;*.opus\0All files\0*.*\0");
         if (g_app->music.AddFiles(p)) UiInvalidate(); });
-    Button(457, RF(a.left + 294, y, 190, 36), L"Add stream (paste URL)", I_ADD, B_GHOST, [] {       // internet radio: the address is taken from the clipboard
+    Button(458, RF(a.left + 294, y, 130, 36), L"Add album", I_FOLDER, B_GHOST, [] { std::wstring d = PickFolder(); if (d.empty()) return; std::wstring nm; int n = g_app->music.AddAlbumFolder(d, nm);
+        if (n) { U.musicTab = 1; U.albumOpen = nm; U.scroll[PG_MUSIC] = 0; UiToast(Fmt(L"Album %ls: %d songs", nm.c_str(), n)); } else UiToast(L"No songs in that folder"); UiInvalidate(); });
+    Button(457, RF(a.left + 434, y, 190, 36), L"Add stream (paste URL)", I_ADD, B_GHOST, [] {       // internet radio: the address is taken from the clipboard
         std::wstring url; if (OpenClipboard(U.h)) { if (HANDLE hd = GetClipboardData(CF_UNICODETEXT)) { if (auto* p = (const wchar_t*)GlobalLock(hd)) { url = p; GlobalUnlock(hd); } } CloseClipboard(); }
         if (g_app->music.AddStream(url)) { UiToast(L"Stream added to My files"); UiInvalidate(); } else UiToast(L"Copy the stream address (http:// or https://) first, then press this"); });
-    C().Text(Fmt(L"%d songs, %d albums", (int)tr.size(), (int)M.Albums().size()), RF(a.left + 496, y, 240, 36), 12.5f, P().faint);
+    C().Text(Fmt(L"%d songs, %d albums", (int)tr.size(), (int)M.Albums().size()), RF(a.left + 636, y, 200, 36), 12.5f, P().faint);
     y += 52;
     if (tr.empty()) { C().Text(L"Nothing here yet. Add a folder: every sub-folder is searched, and albums are rebuilt from the files' own tags.", RF(a.left, y, RW(a), 40), 13, P().dim, 0, false, false, true); return y + 60; }
+    if (U.musicTab == 1 && !U.albumOpen.empty()) {      // one album, opened like a folder
+        auto& al = M.Albums(); int ai = -1; for (size_t i = 0; i < al.size(); ++i) if (!_wcsicmp(al[i].name.c_str(), U.albumOpen.c_str())) ai = (int)i;
+        if (ai < 0) U.albumOpen.clear();
+        else {
+            const MusicAlbum& A1 = al[ai]; RectF cv = RF(a.left, y, 132, 132); bool scoped = M.Mode() == 1 && M.ScopeKind() == 1 && M.ScopeIndex() == ai;
+            C().Shadow(cv, 12, 8, P().dark ? 0.5f : 0.2f); if (ID2D1Bitmap* b = SongCover(tr[A1.tracks[0]].path, budget)) C().BitmapCover(b, cv, 12); else NoteTile(cv, 12, ai);
+            Button(6200, RF(a.left + 152, y, 104, 32), L"Albums", I_BACK, B_GHOST, [] { U.albumOpen.clear(); U.scroll[PG_MUSIC] = 0; UiInvalidate(); });
+            C().Text(A1.name, RF(a.left + 152, y + 38, RW(a) - 160, 30), 21, P().text, 0, true);
+            C().Text((A1.artist.empty() ? std::wstring() : A1.artist + L"   ") + Fmt(L"%d songs", (int)A1.tracks.size()), RF(a.left + 152, y + 68, RW(a) - 160, 20), 12.5f, P().dim);
+            int first = A1.tracks[0]; std::wstring nm = A1.name;
+            Button(6201, RF(a.left + 152, y + 96, 130, 36), L"Play album", I_PLAY, B_PRIMARY, [ai, first] { g_app->music.SetScope(1, ai); PlayFile(first); });
+            Button(6202, RF(a.left + 292, y + 96, 150, 36), L"Remove album", I_TRASH, B_DANGER, [nm] { int n = g_app->music.RemoveAlbum(nm); U.albumOpen.clear(); UiToast(Fmt(L"%d songs taken out of the library (files untouched)", n)); UiInvalidate(); });
+            y += 152;
+            RectF card = RF(a.left, y, RW(a), A1.tracks.size() * 46.f); Card(card);
+            for (size_t n = 0; n < A1.tracks.size(); ++n, y += 46) {
+                if (y > C().H() || y + 46 < 0) continue;
+                int i = A1.tracks[n]; const MusicTrack& t = tr[i]; RectF r = RF(card.left, y, RW(card), 46); int id = 6210 + (int)n * 4; bool on = cur == i && M.Enabled();
+                if (Hot(id)) C().FillRR(Inset(r, 3), 10, P().hover);
+                if (on) C().IconAt(I_MUSIC, r.left + 26, y + 23, 14, P().accent, 1.5f); else C().Text(Fmt(L"%d", (int)n + 1), RF(r.left + 10, y, 32, 46), 12, P().faint, 1);
+                C().Text(t.name, RF(r.left + 50, y, RW(r) - 290, 46), 13.5f, t.enabled ? (on ? P().accent : P().text) : P().faint, 0, on);
+                if (!t.artist.empty() && _wcsicmp(t.artist.c_str(), A1.artist.c_str())) C().Text(t.artist, RF(r.right - 330, y, 180, 46), 11.5f, P().faint, 2);
+                AddHit(RF(r.left, y, RW(r) - 140, 46), id, [ai, i] { g_app->music.SetScope(1, ai); PlayFile(i); });
+                Button(id + 1, RF(r.right - 128, y + 7, 32, 32), L"", t.fav ? I_HEART : I_HEARTO, B_GHOST, [i] { g_app->music.ToggleFav(i); UiInvalidate(); });
+                Toggle(id + 2, r.right - 46, y + 23, t.enabled, [i] { g_app->music.Toggle(i); UiInvalidate(); });
+                if (n + 1 < A1.tracks.size()) C().Line(r.left + 50, y + 46, r.right - 16, y + 46, P().border, 1);
+            }
+            (void)scoped;
+            return y + 30;
+        }
+    }
     if (U.musicTab == 1) {                              // albums
         auto& al = M.Albums(); float cw = 150, gap = 16; int cols = std::max(1, (int)((RW(a) + gap) / (cw + gap)));
         for (size_t i = 0; i < al.size(); ++i) {
@@ -870,7 +904,7 @@ float PageMusic(const RectF& a) {
             if (on) { C().GradStrokeRR(rr, 12, Hex(kPink), Hex(kCyan), 2.f, (float)U.t * 50.f); U.animating = true; } else if (h > 0.01f) C().StrokeRR(rr, 12, Alpha(P().accent, h), 1.5f);
             C().Text(al[i].name, RF(r.left, r.bottom + 6, cw, 20), 13, P().text, 0, true);
             C().Text((al[i].artist.empty() ? std::wstring() : al[i].artist + L"   ") + Fmt(L"%d", (int)al[i].tracks.size()), RF(r.left, r.bottom + 26, cw, 18), 11.5f, P().dim);
-            int k = (int)i, first = al[i].tracks[0]; AddHit(rr, id, [k, first] { g_app->music.SetScope(1, k); PlayFile(first); });
+            std::wstring nm = al[i].name; AddHit(rr, id, [nm] { U.albumOpen = nm; U.scroll[PG_MUSIC] = 0; UiInvalidate(); });      // opens the album; Play is inside
         }
         return y + (float)((al.size() + cols - 1) / cols) * (cw + 54 + gap) + 20;
     }
@@ -1421,6 +1455,7 @@ bool UiScreenshot(const std::wstring& path, int page) {
     U.page = std::clamp(page, 0, PG_COUNT - 1); U.pageT = NowSeconds() - 10;
     if (page == 10) { U.page = PG_MUSIC; U.musicTab = 2; }
     if (page == 11) { U.page = PG_MUSIC; U.musicTab = 1; }
+    if (page == 12) { U.page = PG_MUSIC; U.musicTab = 1; auto& al = g_app->music.Albums(); if (!al.empty()) U.albumOpen = al[0].name; }
     if (page == 20) { U.page = PG_LIBRARY; std::lock_guard<std::mutex> g(g_app->lib.Mutex()); if (!g_app->lib.Divas().empty()) U.detailKey = g_app->lib.Divas()[0].key; }
     if (page == 21) { U.page = PG_LIBRARY; g_app->set.cardMode = 0; }
     if (page == 22) { U.page = PG_STAGE; U.infoOpen = true; }

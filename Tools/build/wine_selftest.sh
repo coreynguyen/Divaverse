@@ -30,6 +30,15 @@ printf '#EXTM3U\r\nA\\Disc1\\t1.mp3\r\nB/loose.wav\r\n' > mus/mix.m3u
 DIVAVERSE_QA_MUSIC="Z:$R/mus" timeout 60 wine Divaverse.exe --uishot 11 "Z:$R/albums.bmp" >/dev/null 2>&1
 grep -q 'qa music: added 4.*with 2 entries' "$WINEPREFIX"/drive_c/users/*/AppData/Local/Divaverse/player.log && echo "PASS music_recursive_import_and_m3u" || { echo "FAIL music_recursive_import_and_m3u"; FAIL=1; }
 for pg in 0 1 2 3 10 11 20 21 22 30 31; do timeout 60 wine Divaverse.exe --theme dark --uishot $pg "Z:$R/ui$pg.bmp" "$D" >/dev/null 2>&1 && echo "PASS ui_page_$pg" || { echo "FAIL ui_page_$pg"; FAIL=1; }; done
+# Content plugins: the sample plugin is built here, installed beside the exe, played, looped, sought and hit-tested; then removed again.
+if x86_64-w64-mingw32-gcc -O2 -shared -static -I "$ROOT/Apps/Player/src" "$ROOT/Tools/plugin_sample/sample_plugin.c" -o "$R/SamplePlugin.dll" 2>/dev/null; then
+  mkdir -p "$R/Plugins"; mv "$R/SamplePlugin.dll" "$R/Plugins/"
+  SECS=7 t plugin_play_loop --sw --expect layout=dual --expect loops=1 --expect unpaired=0 "plugin://sample/bounce"
+  DIVAVERSE_QA_SEEK=60 SECS=5 t plugin_seek --sw --expect seek=60 "plugin://sample/pulse"
+  SECS=4 t plugin_hit --sw --expect hit=10 "plugin://sample/pulse"
+  rm -rf "$R/Plugins"
+  timeout 60 wine Divaverse.exe --selftest "Z:$R/noplug.bmp" --selftest-seconds 3 --layered --sw "plugin://sample/bounce" >/dev/null 2>&1 && { echo "FAIL plugin_removed (still played)"; FAIL=1; } || echo "PASS plugin_removed"
+else echo "FAIL plugin_build"; FAIL=1; fi
 # Wet-Rash: 41 = 19 s of real simulation in sun, 42 = the same in a hurricane, 45 = a whole race to the results screen
 for sc in 41 42 45 40 43 44 46 47 48 49 50 51; do timeout 240 wine Divaverse.exe --uishot $sc "Z:$R/wetrash$sc.bmp" >/dev/null 2>&1 && echo "PASS wetrash_scene_$sc" || { echo "FAIL wetrash_scene_$sc"; FAIL=1; }; done
 echo "artifacts in $R"; exit $FAIL

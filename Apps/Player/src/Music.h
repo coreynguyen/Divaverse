@@ -14,6 +14,7 @@
 struct MusicTrack {
     std::wstring path, name, artist, album;
     bool enabled = true, fav = false, tagged = false;
+    bool albumFixed = false;            // imported as an album folder: the album is the folder, whatever the file's tag says
     float weight = 1.f;                 // shuffle weight 0.15..2.5; skipping lowers it, finishing / replaying raises it; a favourite counts as 3
     int plays = 0, skips = 0;
 };
@@ -28,6 +29,10 @@ public:
     void Flush(bool force = false);                          // writes only if something changed (rate limited unless forced)
     int  AddFiles(const std::vector<std::wstring>& paths);
     int  AddFolder(const std::wstring& dir);                 // recursive
+    // Imports a folder as one album named after the folder (sub-folders included). Files already in the
+    // library are moved into it. Returns the number of songs in it; `name` receives the album to open.
+    int  AddAlbumFolder(const std::wstring& dir, std::wstring& name);
+    int  RemoveAlbum(const std::wstring& name);              // takes its songs out of the library (files are not touched)
     const std::vector<MusicTrack>& Tracks() const { return tracks_; }
     const std::vector<MusicAlbum>& Albums();                 // grouped by album tag (folder name when untagged)
     std::vector<MusicPlaylist>& Playlists() { return lists_; }

@@ -1,5 +1,7 @@
 // Clip decode: MkvDemux (own EBML reader) -> MfH264Decoder (OS decoder MFT) -> slot ring of NV12 planes.
 // No third-party code. Everything Media Foundation lives and dies on the decode thread.
+#include "Plugin.h"
+#include <climits>
 #include "VideoSource.h"
 #include "MkvDemux.h"
 #include "MkvIoWin.h"
@@ -27,6 +29,10 @@ struct VideoSource::Impl {
     std::deque<Pending> q[2]; std::deque<MfFrame> fresh;
     int64_t lastIdx[2] = { -1, -1 };
     bool mfStarted = false, comInit = false;
+#if DV_PLUGINS
+    const DvpPlugin* plug = nullptr; void* pclip = nullptr; DvpClipInfo pinfo{};
+    std::vector<uint8_t> pbgra, py, puv, pay, pauv; std::atomic<float> pms{0};
+#endif
 };
 
 VideoSource::~VideoSource() { Stop(); delete d; d = nullptr; if (exited_) CloseHandle(exited_); }
@@ -64,7 +70,10 @@ bool VideoSource::HitTest(float u, float v) const {
 bool VideoSource::FullRange() const { return d && d->fullRange; }
 
 VideoSource::DecodeInfo VideoSource::Info() const {
-    float fm = 0; if (d) for (auto& dc : d->dec) fm += dc.FeedMs();        // both tracks of a dual clip: cost per shown frame
+    float fm = 0; if (d) for (auto& dc : d->dec) fm += dc.FeedMs();
+#if DV_PLUGINS
+    if (d && d->plug) fm = d->pms;
+#endif        // both tracks of a dual clip: cost per shown frame
     return { hwActive_, gpuFrames_.load(), cpuFrames_.load(), streamChanges_.load(), loops_.load(), fed_.load(), emitted_.load(), tsAnomalies_.load(), stage_.load(), fm };
 }
 
@@ -90,7 +99,79 @@ bool VideoSource::Open(const ClipDesc& clip, ID3D11Device* dev, ID3D11DeviceCont
     return true;
 }
 
+#if DV_PLUGINS
+bool VideoSource::Authored(float& au, float& gv, double& ppm) const {
+    if (!d || !d->pclip) return false;
+    au = d->pinfo.anchor_u > 0 && d->pinfo.anchor_u < 1 ? d->pinfo.anchor_u : 0.5f; gv = d->pinfo.ground_v > 0 && d->pinfo.ground_v <= 1 ? d->pinfo.ground_v : 0.96f; ppm = d->pinfo.pixels_per_metre; return true;
+}
+// A plugin clip arrives as BGRA frames. They are turned into the same thing the decoder path produces (a colour
+// picture and an alpha picture, each as luma + chroma planes, BT.709 full range), so the renderer, the hit mask, the
+// clock and seeking are shared with every other clip and the renderer needs no second code path.
+bool VideoSource::InitPlugin(std::wstring& err) {
+    std::wstring item; d->plug = PluginFor(clip_.path, item);
+    if (!d->plug) { err = L"the plugin that provides this item is not installed"; return false; }
+    d->pclip = d->plug->open(item.c_str(), &d->pinfo);
+    if (!d->pclip) { err = L"the plugin could not open this item"; return false; }
+    int w = d->pinfo.width & ~1, h = d->pinfo.height & ~1;
+    if (w < 16 || h < 16 || d->pinfo.width > 8192 || d->pinfo.height > 8192 || d->pinfo.frames <= 0) { err = L"the plugin reported an unusable clip (size or length)"; return false; }
+    layout_ = Layout::Dual; d->roles = 2; d->texW[0] = d->texW[1] = w; d->texH[0] = d->texH[1] = h; d->fullRange = d->alphaFull = true; hwActive_ = false;
+    fps_ = d->pinfo.fps_den > 0 && d->pinfo.fps_num > 0 ? (double)d->pinfo.fps_num / d->pinfo.fps_den : 25.0; if (!(fps_ > 1 && fps_ < 241)) fps_ = 25.0;
+    clipFrames_ = d->pinfo.frames; clip_.frames = (int)std::min<int64_t>(d->pinfo.frames, INT_MAX);
+    clip_.rgbRect = { 0, 0, w, h }; clip_.alphaRect = clip_.rgbRect; clip_.rectsKnown = true; perfW_ = w; perfH_ = h;
+    d->pbgra.resize((size_t)d->pinfo.width * d->pinfo.height * 4); d->py.resize((size_t)w * h); d->pay.resize((size_t)w * h); d->puv.resize((size_t)w * h / 2); d->pauv.assign((size_t)w * h / 2, 128);
+    Log("open %s: plugin '%s' %dx%d fps=%.3f frames=%lld", WToUtf8(clip_.path).c_str(), WToUtf8(d->plug->id).c_str(), w, h, fps_, (long long)d->pinfo.frames);
+    return true;
+}
+void VideoSource::PluginLoop() {
+    const int w = perfW_, h = perfH_, stride = d->pinfo.width * 4; const int64_t n = d->pinfo.frames;
+    int64_t loopBase = 0, idx = 0; int myEpoch = epoch_.load();
+    while (!stop_) {
+        if (epoch_.load() != myEpoch) { myEpoch = epoch_.load(); idx = std::clamp<int64_t>(seekFrame_.load(), 0, n - 1); loopBase = 0; stage_ = "seek"; }
+        int si = -1; stage_ = "wait-slot";
+        {
+            std::unique_lock<std::mutex> lk(m_);
+            cv_.wait(lk, [&] { if (stop_ || epoch_.load() != myEpoch) return true; for (int i = 0; i < kSlots; ++i) if (slots_[i].st == FrameSlot::Free) { si = i; return true; } return false; });
+            if (stop_) break;
+            if (epoch_.load() != myEpoch || si < 0) continue;
+        }
+        stage_ = "plugin-read"; ++fed_; double t0 = NowSeconds();
+        if (!d->plug->read(d->pclip, idx, d->pbgra.data(), stride)) { Log("plugin read failed at frame %lld", (long long)idx); failed_ = true; break; }
+        stage_ = "convert";
+        for (int y = 0; y < h; y += 2) {
+            const uint8_t* r0 = &d->pbgra[(size_t)y * stride], *r1 = r0 + stride; uint8_t* y0 = &d->py[(size_t)y * w], *y1 = y0 + w, *a0 = &d->pay[(size_t)y * w], *a1 = a0 + w, *uv = &d->puv[(size_t)(y / 2) * w];
+            for (int x = 0; x < w; x += 2) {
+                int sb = 0, sg = 0, sr = 0, sy = 0;
+                for (int k = 0; k < 4; ++k) { const uint8_t* p = (k & 2 ? r1 : r0) + (size_t)(x + (k & 1)) * 4; int Y = (p[2] * 13933 + p[1] * 46871 + p[0] * 4732 + 32768) >> 16;      // BT.709, full range
+                    ((k & 2) ? y1 : y0)[x + (k & 1)] = (uint8_t)Y; ((k & 2) ? a1 : a0)[x + (k & 1)] = p[3]; sb += p[0]; sg += p[1]; sr += p[2]; sy += Y; }
+                (void)sg;
+                uv[x] = (uint8_t)std::clamp(128 + ((sb - sy) * 8829 >> 16), 0, 255);          // Cb = (B - Y) / 1.8556, averaged over the 2x2 block
+                uv[x + 1] = (uint8_t)std::clamp(128 + ((sr - sy) * 10404 >> 16), 0, 255);     // Cr = (R - Y) / 1.5748
+            }
+        }
+        d->pms = d->pms + ((float)((NowSeconds() - t0) * 1000) - d->pms) * 0.1f;
+        stage_ = "upload"; FrameSlot& s = slots_[si];
+        if (!EnsurePlanes(s.p[0], w, h, false) || !EnsurePlanes(s.p[1], w, h, false)) { Log("plane alloc failed"); failed_ = true; break; }
+        s.mw = std::max(1, w / 4); s.mh = std::max(1, h / 4); s.mask.resize((size_t)s.mw * s.mh);
+        for (int y = 0; y < s.mh; ++y) { const uint8_t* row = &d->pay[(size_t)std::min(h - 1, y * 4 + 2) * w]; uint8_t* o = &s.mask[(size_t)y * s.mw]; for (int x = 0; x < s.mw; ++x) o[x] = row[std::min(w - 1, x * 4 + 2)] > 64; }
+        {
+            std::lock_guard<CtxLock> g(*lock_);
+            ctx_->UpdateSubresource(s.p[0].texA.Get(), 0, nullptr, d->py.data(), (UINT)w, 0); ctx_->UpdateSubresource(s.p[0].texB.Get(), 0, nullptr, d->puv.data(), (UINT)w, 0);
+            ctx_->UpdateSubresource(s.p[1].texA.Get(), 0, nullptr, d->pay.data(), (UINT)w, 0); ctx_->UpdateSubresource(s.p[1].texB.Get(), 0, nullptr, d->pauv.data(), (UINT)w, 0);
+        }
+        { std::lock_guard<std::mutex> lk(m_); if (epoch_.load() == myEpoch) { s.frame = loopBase + idx; s.st = FrameSlot::Ready; ++emitted_; } }
+        cpuFrames_ += 2; stage_ = "run";
+        if (++idx >= n) { idx = 0; loopBase += n; ++loops_; }
+    }
+}
+#else
+bool VideoSource::Authored(float&, float&, double&) const { return false; }
+bool VideoSource::InitPlugin(std::wstring&) { return false; } void VideoSource::PluginLoop() {}
+#endif
+
 bool VideoSource::InitOnThread(std::wstring& err) {
+#if DV_PLUGINS
+    if (PluginIsPath(clip_.path)) return InitPlugin(err);
+#endif
     HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     d->comInit = SUCCEEDED(hr);
     if (FAILED(hr = MFStartup(MF_VERSION, MFSTARTUP_LITE))) { err = L"Media Foundation unavailable (MFStartup " + HrText(hr) + L")"; return false; }
@@ -281,8 +362,14 @@ void VideoSource::ThreadMain() {
     cv_.notify_all();
     if (ok) {
         { std::unique_lock<std::mutex> lk(m_); cv_.wait(lk, [&] { return go_.load() || stop_.load(); }); }
+#if DV_PLUGINS
+        if (!stop_ && d->pclip) PluginLoop(); else
+#endif
         if (!stop_) DecodeLoop();
     }
+#if DV_PLUGINS
+    if (d->pclip) { d->plug->close(d->pclip); d->pclip = nullptr; }
+#endif
     // teardown on the thread that created the MF objects
     for (auto& q : d->q) q.clear();
     d->fresh.clear();

@@ -111,7 +111,7 @@ void Music::Load() {
         for (;;) { size_t e = line.find('\t', i); f.push_back(line.substr(i, e == std::string::npos ? e : e - i)); if (e == std::string::npos) break; i = e + 1; }
         MusicTrack t;
         if (f.size() >= 5) {                                    // current format
-            t.enabled = f[0].find('-') == std::string::npos; t.fav = f[0].find('f') != std::string::npos; t.tagged = f[0].find('t') != std::string::npos;
+            t.enabled = f[0].find('-') == std::string::npos; t.fav = f[0].find('f') != std::string::npos; t.tagged = f[0].find('t') != std::string::npos; t.albumFixed = f[0].find('a') != std::string::npos;
             t.weight = std::clamp((float)atof(f[1].c_str()), 0.15f, 2.5f); t.plays = atoi(f[2].c_str()); t.skips = atoi(f[3].c_str()); t.path = Utf8ToW(f[4]);
             if (f.size() > 5) t.name = Utf8ToW(f[5]); if (f.size() > 6) t.artist = Utf8ToW(f[6]); if (f.size() > 7) t.album = Utf8ToW(f[7]);
         } else { std::string p = f[0]; if (p[0] == '-') { t.enabled = false; p.erase(0, 1); } t.path = Utf8ToW(p); }      // 0.3 / 0.4 list: one path per line
@@ -129,7 +129,7 @@ void Music::Load() {
 void Music::Save() {
     std::string out = "# Divaverse music library: flags(-=off f=favourite t=tags read)\tweight\tplays\tskips\tpath\ttitle\tartist\talbum\r\n"; char b[64];
     for (auto& t : tracks_) {
-        std::string fl; if (!t.enabled) fl += '-'; if (t.fav) fl += 'f'; if (t.tagged) fl += 't'; if (fl.empty()) fl = "+";
+        std::string fl; if (!t.enabled) fl += '-'; if (t.fav) fl += 'f'; if (t.tagged) fl += 't'; if (t.albumFixed) fl += 'a'; if (fl.empty()) fl = "+";
         snprintf(b, sizeof(b), "\t%.3f\t%d\t%d\t", t.weight, t.plays, t.skips);
         out += fl + b + WToUtf8(t.path) + "\t" + WToUtf8(t.name) + "\t" + WToUtf8(t.artist) + "\t" + WToUtf8(t.album) + "\r\n";
     }
@@ -149,8 +149,25 @@ const std::vector<MusicAlbum>& Music::Albums() {
         if (a->artist.empty()) a->artist = t.artist; else if (!t.artist.empty() && _wcsicmp(a->artist.c_str(), t.artist.c_str())) a->artist = L"Various artists";
         a->tracks.push_back(i);
     }
+    for (auto& x : albums_) std::sort(x.tracks.begin(), x.tracks.end(), [&](int p, int q) { return _wcsicmp(tracks_[p].path.c_str(), tracks_[q].path.c_str()) < 0; });     // file order = track order
     std::sort(albums_.begin(), albums_.end(), [](const MusicAlbum& x, const MusicAlbum& y) { return _wcsicmp(x.name.c_str(), y.name.c_str()) < 0; });
     return albums_;
+}
+int Music::AddAlbumFolder(const std::wstring& dirIn, std::wstring& name) {
+    std::wstring dir = dirIn; while (dir.size() > 3 && (dir.back() == L'\\' || dir.back() == L'/')) dir.pop_back();
+    size_t sl = dir.find_last_of(L"\\/"); name = sl == std::wstring::npos ? dir : dir.substr(sl + 1); if (name.empty()) name = dir;
+    AddFolder(dir);
+    std::wstring pre = dir + L"\\"; int n = 0;
+    for (auto& t : tracks_) { if (_wcsnicmp(t.path.c_str(), pre.c_str(), pre.size())) continue;
+        t.album = name; t.albumFixed = true; ++n; }                       // discs / sub-folders stay inside the one album, in path order
+    if (n) { ++gen_; Touch(); }
+    return n;
+}
+int Music::RemoveAlbum(const std::wstring& name) {
+    int n = 0; std::wstring cur = current_ >= 0 && current_ < (int)tracks_.size() ? tracks_[current_].path : L"";
+    for (size_t i = tracks_.size(); i-- > 0;) if (!_wcsicmp(tracks_[i].album.c_str(), name.c_str())) { tracks_.erase(tracks_.begin() + i); ++n; }
+    if (n) { current_ = FindTrack(cur); recent_.clear(); scopeKind_ = 0; ++gen_; Touch(); }
+    return n;
 }
 void Music::Toggle(int i) { if (i >= 0 && i < (int)tracks_.size()) { tracks_[i].enabled = !tracks_[i].enabled; Touch(); } }
 void Music::ToggleFav(int i) { if (i >= 0 && i < (int)tracks_.size()) { tracks_[i].fav = !tracks_[i].fav; Touch(); } }
@@ -303,7 +320,7 @@ void Music::Poll() {
     {   // tags read by the worker are applied here, on the UI thread
         std::vector<Tag> done; { std::lock_guard<std::mutex> g(tagMx_); done.swap(tagDone_); }
         for (auto& t : done) { int i = FindTrack(t.path); if (i < 0) continue; MusicTrack& m = tracks_[i]; m.tagged = true;
-            if (!t.title.empty()) m.name = t.title; if (!t.artist.empty()) m.artist = t.artist; if (!t.album.empty()) m.album = t.album; }
+            if (!t.title.empty()) m.name = t.title; if (!t.artist.empty()) m.artist = t.artist; if (!t.album.empty() && !m.albumFixed) m.album = t.album; }
         if (!done.empty()) { ++gen_; Touch(); }
     }
     Flush();

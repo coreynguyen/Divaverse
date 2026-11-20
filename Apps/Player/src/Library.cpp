@@ -5,10 +5,27 @@
 #include "MkvIoWin.h"
 #include "MfDecoder.h"
 #include <cwctype>
+#include "Plugin.h"
 #include <memory>
 #include <cmath>
 
 bool DecodePoster(const ClipDesc& clip, int targetH, int frameNo, std::vector<uint8_t>& out, int& ow, int& oh, std::wstring& err) {
+#if DV_PLUGINS
+    if (PluginIsPath(clip.path)) {                        // a frame from the plugin, scaled (box filter) and premultiplied
+        std::wstring item; const DvpPlugin* p = PluginFor(clip.path, item); DvpClipInfo ci{}; void* c = p ? p->open(item.c_str(), &ci) : nullptr;
+        if (!c) { err = L"plugin cannot open"; return false; }
+        bool ok = ci.width >= 16 && ci.height >= 16 && ci.width <= 8192 && ci.height <= 8192 && ci.frames > 0; std::vector<uint8_t> src;
+        if (ok) { src.resize((size_t)ci.width * ci.height * 4); ok = p->read(c, std::min<int64_t>(frameNo, ci.frames - 1), src.data(), ci.width * 4) != 0; }
+        p->close(c);
+        if (!ok) { err = L"plugin frame failed"; return false; }
+        oh = std::min(targetH, ci.height); ow = std::max(1, (int)((int64_t)ci.width * oh / ci.height)); out.assign((size_t)ow * oh * 4, 0);
+        for (int y = 0; y < oh; ++y) { int y0 = (int)((int64_t)y * ci.height / oh), y1 = std::max(y0 + 1, (int)((int64_t)(y + 1) * ci.height / oh));
+            for (int x = 0; x < ow; ++x) { int x0 = (int)((int64_t)x * ci.width / ow), x1 = std::max(x0 + 1, (int)((int64_t)(x + 1) * ci.width / ow)); unsigned b = 0, g = 0, r = 0, a = 0, n = 0;
+                for (int yy = y0; yy < y1; ++yy) for (int xx = x0; xx < x1; ++xx) { const uint8_t* q = &src[((size_t)yy * ci.width + xx) * 4]; b += q[0] * q[3]; g += q[1] * q[3]; r += q[2] * q[3]; a += q[3]; ++n; }
+                uint8_t* o = &out[((size_t)y * ow + x) * 4]; o[0] = (uint8_t)(b / (255 * n)); o[1] = (uint8_t)(g / (255 * n)); o[2] = (uint8_t)(r / (255 * n)); o[3] = (uint8_t)(a / n); } }
+        return true;
+    }
+#endif
     Win32Io io; MkvDemux mkv; std::string e8;
     if (!io.Open(clip.path)) { err = L"cannot open"; return false; }
     if (!mkv.Open(&io, e8)) { err = Utf8ToW(e8); return false; }
@@ -156,6 +173,25 @@ void Library::ScanDir(const std::wstring& dir, int depth) {
     if (depth < 3) for (auto& d : dirs) ScanDir(JoinPath(dir, d), depth + 1);
 }
 
+void Library::AddPlugins() {
+#if DV_PLUGINS
+    for (size_t i = 0; i < PluginCount(); ++i) {
+        struct Ctx { Library* L; const DvpPlugin* p; size_t n; } cx{ this, PluginAt(i), 0 };
+        cx.p->scan([](void* u, const DvpItem* it) {
+            Ctx& c = *(Ctx*)u; if (!it || !it->id || !*it->id || c.n >= 100000 || (c.L->abort_ && *c.L->abort_)) return;
+            LibClip lc; std::wstring title = it->title && *it->title ? it->title : it->id, gid = it->group_id && *it->group_id ? it->group_id : it->id;
+            lc.desc.path = PluginPath(c.p->id, it->id); if (c.L->FindClip(lc.desc.path) >= 0) return;
+            lc.desc.id = title; lc.desc.title = title; lc.desc.layout = Layout::Dual; lc.title = title;
+            lc.info.path = lc.desc.path; lc.info.dual = true; lc.info.durationS = it->seconds; lc.seconds = it->seconds;
+            lc.info.meta.schema = 1; lc.info.meta.divaId = WToUtf8(std::wstring(c.p->id) + L":" + gid); lc.info.meta.divaName = WToUtf8(it->group_name && *it->group_name ? it->group_name : gid);
+            lc.info.meta.order = it->order; lc.info.meta.rating = std::clamp(it->rating, 0, 5); lc.info.meta.title = WToUtf8(title);
+            c.L->clips_.push_back(std::move(lc)); c.L->clipShow_.push_back(-1); ++c.n;
+        }, &cx);
+        Log("library: plugin '%s' offers %zu items", WToUtf8(cx.p->id).c_str(), cx.n);
+    }
+#endif
+}
+
 void Library::Group() {
     divas_.clear();
     for (size_t i = 0; i < clips_.size(); ++i) {
@@ -189,6 +225,7 @@ void Library::Rescan(const std::vector<std::wstring>& folders, HWND notify, UINT
         scratch->abort_ = &stop_;
         scratch->shows_.reserve(256);                     // AddMkv keeps pointers into shows_ during the scan
         for (auto& root : folders) if (DirExists(root)) scratch->ScanDir(root, 0);
+        scratch->AddPlugins();
         bool aborted = stop_;
         if (!aborted) scratch->Group();
         int gen;

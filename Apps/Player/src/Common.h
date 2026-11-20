@@ -36,8 +36,13 @@ using CtxLock = std::recursive_mutex;
 // Monotonic seconds (QPC)
 double NowSeconds();
 
-#define DV_VERSION_W L"0.14.0"
-#define DV_VERSION   "0.14.0"
+// Content plugins (DvPlugin.h): 1 = the Player loads Plugins\*.dll and plays what they offer. Set to 0 and the
+// support is compiled out; nothing else changes.
+#ifndef DV_PLUGINS
+#define DV_PLUGINS 1
+#endif
+#define DV_VERSION_W L"0.15.0"
+#define DV_VERSION   "0.15.0"
 
 // Writes the whole file to <path>.tmp, flushes it, then swaps it in with one rename. A crash or power cut leaves
 // either the old file or the new one, never a truncated mix.

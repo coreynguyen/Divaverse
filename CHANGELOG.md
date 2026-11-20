@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.15.0 (albums, content plugins)
+- Music: the options (Crossfade, Even loudness, Shuffle) move to their own row when the window is too narrow to hold
+  them beside the tabs; they no longer overlap.
+- Albums open like folders: click an album to see its songs in file order, play one, play the album, favourite or
+  disable songs, or take the album out of the library. "Add album" imports a folder (sub-folders included) as one
+  album named after the folder, whatever the files' tags say.
+- Content plugins: Divaverse loads `Plugins\*.dll` beside the exe (interface: `Apps/Player/src/DvPlugin.h`, plain C).
+  A plugin lists items and hands over BGRA frames; its items appear in the library with thumbnails and play on the
+  stage like any clip (looping, seeking, click hit-testing, queue, statistics). Video only. Remove the DLL and the
+  items are gone; `DV_PLUGINS 0` compiles the support out. `Tools/plugin_sample` is a working example and skeleton.
+
 ## 0.14.0 (library and music)
 - Play statistics per clip (times staged, seconds actually shown, last played), kept in userdata.txt.
 - Library search conditions: fav, unseen, season, tag:x, rating>=n / rating:n, plays>=n / plays:n, stale:days;

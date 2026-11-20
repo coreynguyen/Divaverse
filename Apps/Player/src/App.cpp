@@ -10,6 +10,7 @@
 #include <cmath>
 #include <algorithm>
 #include "MfDecoder.h"
+#include "Plugin.h"
 
 App* g_app = nullptr;
 
@@ -205,8 +206,9 @@ bool App::WantHw() const { return !cliSw_ && r_.VideoCapable() && set.decodeMode
 
 bool App::OpenPath(const std::wstring& pathIn) {
     wchar_t full[MAX_PATH * 2]; std::wstring path = pathIn;
-    if (DWORD n = GetFullPathNameW(pathIn.c_str(), MAX_PATH * 2, full, nullptr); n && n < MAX_PATH * 2) path = full;
-    while (path.size() > 3 && (path.back() == L'\\' || path.back() == L'/')) path.pop_back();
+    if (PluginIsPath(pathIn)) { if (lib.Scanning()) lib.WaitScan(15); }         // plugin items exist only in the library: let a running scan finish
+    else if (DWORD n = GetFullPathNameW(pathIn.c_str(), MAX_PATH * 2, full, nullptr); n && n < MAX_PATH * 2) path = full;
+    while (!PluginIsPath(path) && path.size() > 3 && (path.back() == L'\\' || path.back() == L'/')) path.pop_back();
     Show s; std::wstring err, first = path; int idx = 0;
     auto fromLibrary = [&](const std::wstring& clipPath) {
         std::lock_guard<std::mutex> g(lib.Mutex());
@@ -215,7 +217,10 @@ bool App::OpenPath(const std::wstring& pathIn) {
         for (size_t i = 0; i < s.clips.size(); ++i) if (!_wcsicmp(s.clips[i].path.c_str(), clipPath.c_str())) idx = (int)i;
         return !s.clips.empty();
     };
-    if (!fromLibrary(path)) {
+    if (!fromLibrary(path) && PluginIsPath(path)) {       // not scanned (yet): the address alone is enough to play it
+        std::wstring item; if (!PluginFor(path, item)) { Notify(L"Cannot open", L"The plugin that provides this item is not installed."); Log("open failed: no plugin for %s", WToUtf8(path).c_str()); return false; }
+        ClipDesc cdsc; cdsc.id = item; cdsc.title = item; cdsc.path = path; cdsc.layout = Layout::Dual; s.clips = { cdsc }; s.title = item; idx = 0;
+    } else if (s.clips.empty()) {
         Show raw;
         if (!LoadShowOrClip(path, raw, err)) { Notify(L"Cannot open", err); Log("open failed: %s", WToUtf8(err).c_str()); return false; }
         if (raw.clips.empty() || !fromLibrary(raw.clips[0].path)) {          // not in the library: describe it from the files themselves
@@ -257,6 +262,7 @@ bool App::StartClip(int idx, bool hw) {
     }
     if (!ok) { Notify(L"Cannot play clip", err); UpdateOverlayVisibility(); UiInvalidate(); return false; }
     clipIdx = idx; src_ = std::move(s); clipHw_ = src_->HwActive(); src_->Start();
+    { float au, gv; double ppm; if (src_->Authored(au, gv, ppm)) { ClipDesc& cd = show.clips[idx]; cd.anchorU = au; cd.groundY = gv; if (ppm > 0) cd.ppm = ppm; } }      // plugin clips say where the floor is when opened
     stagePath_ = show.clips[idx].path; set.last = stagePath_;
     if (!set.noSave) user.Played(stagePath_);
     auto& rc = set.recent;
@@ -649,7 +655,7 @@ bool App::LoadClipPlaylist(const std::wstring& name, bool play) {
     while (p < txt.size()) { size_t e = txt.find('\n', p); std::string l = txt.substr(p, e == std::string::npos ? std::string::npos : e - p); p = e == std::string::npos ? txt.size() : e + 1;
         while (!l.empty() && (l.back() == '\r' || l.back() == ' ')) l.pop_back();
         if (l.empty() || l[0] == '#') continue;
-        std::wstring w = Utf8ToW(l); if (FileExists(w)) v.push_back(w); }
+        std::wstring w = Utf8ToW(l); if (FileExists(w) || PluginIsPath(w)) v.push_back(w); }
     if (v.empty()) return false;
     set.queue = v; set.Save();
     if (play) PlayQueued();
@@ -821,6 +827,7 @@ std::wstring App::DiagText() {
                  (unsigned long long)presented_, (unsigned long long)src_->Dropped(), (unsigned long long)src_->Unpaired(), (unsigned long long)di.tsAnomalies, src_->TrackOffsetMs()); s += b;
     } else s += L"On stage: nobody\r\n";
     s += L"Music: " + (music.Enabled() ? music.NowPlaying() : std::wstring(L"off")) + (music.LastError().empty() ? L"" : L" | " + music.LastError()) + L"\r\n";
+    if (PluginCount()) s += L"Plugins: " + PluginSummary() + L"\r\n";
     if (!set.lastStall.empty()) s += L"Last stall on this PC: " + set.lastStall + L"\r\n";
     if (!events_.empty()) { s += L"Events:\r\n"; for (auto& e : events_) s += L"  " + Utf8ToW(e) + L"\r\n"; }
     return s;
@@ -1175,6 +1182,7 @@ int App::Run(HINSTANCE hi, int argc, wchar_t** argv) {
     bigIcon_ = MakeIcon(IconState::Normal, 64);
     wmTaskbarCreated_ = RegisterWindowMessageW(L"TaskbarCreated");
 
+    PluginsLoad();
     if (!CreateOverlay() || !InitRenderer()) return 2;
     set.layout = LayoutKey(); if (!test && set.RecallPlacement(set.layout)) Log("placement for %s restored", WToUtf8(set.layout).c_str());
     if (!test) {
@@ -1186,7 +1194,8 @@ int App::Run(HINSTANCE hi, int argc, wchar_t** argv) {
             Notify(L"Divaverse closed unexpectedly last time", L"A crash report was saved. Settings > Diagnostics > Export diagnostics collects it with the logs."); }
     }
     { wchar_t qm[MAX_PATH]; if (GetEnvironmentVariableW(L"DIVAVERSE_QA_MUSIC", qm, MAX_PATH)) { music.Load();      // QA: recursive import + playlist import
-            int n = music.AddFolder(qm); Sleep(1500); music.Poll(); int pl = music.ImportPlaylist(JoinPath(qm, L"mix.m3u"));
+            int n = music.AddFolder(qm); Sleep(1500); music.Poll();
+            if (uishotPage == 12) { std::wstring nm; int k = music.AddAlbumFolder(JoinPath(qm, L"A"), nm); Log("qa music: album folder '%s' holds %d songs, %zu albums", WToUtf8(nm).c_str(), k, music.Albums().size()); } int pl = music.ImportPlaylist(JoinPath(qm, L"mix.m3u"));
             Log("qa music: added %d, tracks %zu, albums %zu, playlist %d with %zu entries, first '%s' / '%s' / '%s'", n, music.Tracks().size(), music.Albums().size(), pl,
                 pl >= 0 ? music.Playlists()[pl].paths.size() : (size_t)0, music.Tracks().empty() ? "" : WToUtf8(music.Tracks()[0].name).c_str(), music.Tracks().empty() ? "" : WToUtf8(music.Tracks()[0].artist).c_str(), music.Tracks().empty() ? "" : WToUtf8(music.Tracks()[0].album).c_str()); } } music.Select(set.musicMode, set.musicMode == 0 ? set.station : -1);
     if (!test) {
@@ -1202,7 +1211,7 @@ int App::Run(HINSTANCE hi, int argc, wchar_t** argv) {
     if (selftest_.empty()) {
         if (gfx && (!startHidden_ || !uishot.empty())) UiShow(uishot.empty());
         RescanLibrary();
-        if (path.empty() && !test && !set.last.empty() && (FileExists(set.last) || DirExists(set.last))) path = set.last;   // bring back whoever was on stage
+        if (path.empty() && !test && !set.last.empty() && (FileExists(set.last) || DirExists(set.last) || PluginIsPath(set.last))) path = set.last;   // bring back whoever was on stage
     }
     if (!path.empty()) OpenPath(path);
     if (startEdit) SetEdit(true);
@@ -1249,7 +1258,7 @@ int App::Run(HINSTANCE hi, int argc, wchar_t** argv) {
 done:
     FlyoutClose(); WheelClose(); WetRashClose(); SfxShutdown();
     lib.Stop(); music.SetEnabled(false); music.Flush(true); user.Flush(true); set.Save();
-    VideoSource::Retire(src_); r_.Shutdown();
+    VideoSource::Retire(src_); r_.Shutdown(); PluginsUnload();
     for (auto h : icons_) if (h) DestroyIcon(h);
     if (bigIcon_) DestroyIcon(bigIcon_);
     if (timer_) CloseHandle(timer_);
