@@ -13,6 +13,7 @@
 #include <mfobjects.h>
 #include <deque>
 #include <set>
+#include <atomic>
 
 struct MfFrame {
     int64_t t100 = 0;                       // presentation time, 100 ns units (as fed on input)
@@ -42,6 +43,7 @@ public:
     int  GpuFrames() const { return gpuFrames_; }                 // frames that actually arrived as D3D11 surfaces
     int  CpuFrames() const { return cpuFrames_; }
     int  StreamChanges() const { return streamChanges_; }
+    float FeedMs() const { return feedMs_; }                      // smoothed cost of one access unit (input + whatever output it released)
 
 private:
     bool SetOutputType(std::wstring& err);
@@ -54,7 +56,8 @@ private:
     bool needParams_ = true, streaming_ = false;
     std::multiset<int64_t> pendingTs_;
     std::vector<uint8_t> au_;
-    int gpuFrames_ = 0, cpuFrames_ = 0, streamChanges_ = 0;
+    int gpuFrames_ = 0, cpuFrames_ = 0, streamChanges_ = 0; std::atomic<float> feedMs_{0};
 };
 
 std::wstring HrText(HRESULT hr);
+extern std::atomic<int> g_decTrace;          // > 0: every decoder call is logged (counts down per line); Settings -> Record GPU trace

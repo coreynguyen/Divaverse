@@ -108,6 +108,9 @@ bool MfH264Decoder::Init(const AvcConfig& cfg, int fpsNum, int fpsDen, ID3D11Dev
     return true;
 }
 
+std::atomic<int> g_decTrace{0};
+#define DECTRACE(...) do { if (g_decTrace.load(std::memory_order_relaxed) > 0) { --g_decTrace; Log(__VA_ARGS__); } } while (0)
+
 bool MfH264Decoder::Pull(std::deque<MfFrame>& out, std::wstring& err) {
     for (int guard = 0; guard < 256; ++guard) {
         MFT_OUTPUT_DATA_BUFFER ob{}; DWORD status = 0; ComPtr<IMFSample> mine;
@@ -117,7 +120,8 @@ bool MfH264Decoder::Pull(std::deque<MfFrame>& out, std::wstring& err) {
             if (FAILED(h2) || FAILED(MFCreateSample(&mine)) || FAILED(mine->AddBuffer(b.Get()))) { err = L"output sample allocation failed"; return false; }
             ob.pSample = mine.Get();
         }
-        HRESULT hr = mft_->ProcessOutput(0, 1, &ob, &status);
+        double tq = NowSeconds(); HRESULT hr = mft_->ProcessOutput(0, 1, &ob, &status);
+        DECTRACE("dectrace out hr=0x%08X status=0x%X sample=%d flags=0x%X ms=%.2f pending=%zu", (unsigned)hr, (unsigned)status, ob.pSample ? 1 : 0, (unsigned)ob.dwStatus, (NowSeconds() - tq) * 1000, pendingTs_.size());
         if (ob.pEvents) ob.pEvents->Release();
         ComPtr<IMFSample> got;
         if (providesSamples_) got.Attach(ob.pSample); else got = mine;      // MFT-allocated: we own the returned ref
@@ -165,8 +169,10 @@ bool MfH264Decoder::Feed(const uint8_t* avcc, size_t n, int64_t t100, bool key, 
     if (needParams_) s->SetUINT32(MFSampleExtension_Discontinuity, TRUE);
     needParams_ = false;
     pendingTs_.insert(t100);
+    double tf = NowSeconds(); struct Cost { double t; std::atomic<float>& m; ~Cost() { float v = (float)((NowSeconds() - t) * 1000); m = m + (v - m) * 0.1f; } } cost{ tf, feedMs_ };
     for (int tries = 0; tries < 64; ++tries) {
-        HRESULT hr = mft_->ProcessInput(0, s.Get(), 0);
+        double tq = NowSeconds(); HRESULT hr = mft_->ProcessInput(0, s.Get(), 0);
+        DECTRACE("dectrace in t=%lld idr=%d bytes=%zu hr=0x%08X try=%d ms=%.2f d3d=%d", (long long)t100, idr ? 1 : 0, au_.size(), (unsigned)hr, tries, (NowSeconds() - tq) * 1000, mgr_ ? 1 : 0);
         if (hr == MF_E_NOTACCEPTING) {
             size_t before = out.size();
             if (!Pull(out, err)) return false;

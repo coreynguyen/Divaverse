@@ -64,7 +64,8 @@ bool VideoSource::HitTest(float u, float v) const {
 bool VideoSource::FullRange() const { return d && d->fullRange; }
 
 VideoSource::DecodeInfo VideoSource::Info() const {
-    return { hwActive_, gpuFrames_.load(), cpuFrames_.load(), streamChanges_.load(), loops_.load(), fed_.load(), emitted_.load(), tsAnomalies_.load(), stage_.load() };
+    float fm = 0; if (d) for (auto& dc : d->dec) fm += dc.FeedMs();        // both tracks of a dual clip: cost per shown frame
+    return { hwActive_, gpuFrames_.load(), cpuFrames_.load(), streamChanges_.load(), loops_.load(), fed_.load(), emitted_.load(), tsAnomalies_.load(), stage_.load(), fm };
 }
 
 void VideoSource::Rects(float rgb[4], float alpha[4]) const {

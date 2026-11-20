@@ -5,6 +5,7 @@
 #include "MkvIoWin.h"
 #include "MfDecoder.h"
 #include <cwctype>
+#include <memory>
 #include <cmath>
 
 bool DecodePoster(const ClipDesc& clip, int targetH, int frameNo, std::vector<uint8_t>& out, int& ow, int& oh, std::wstring& err) {
@@ -140,6 +141,7 @@ void Library::AddManifest(const std::wstring& dir) {
 }
 
 void Library::ScanDir(const std::wstring& dir, int depth) {
+    if (abort_ && *abort_) return;
     if (FileExists(JoinPath(dir, L"manifest.json"))) { AddManifest(dir); return; }
     WIN32_FIND_DATAW fd; HANDLE h = FindFirstFileW((dir + L"\\*").c_str(), &fd);
     if (h == INVALID_HANDLE_VALUE) return;
@@ -150,7 +152,7 @@ void Library::ScanDir(const std::wstring& dir, int depth) {
     } while (FindNextFileW(h, &fd));
     FindClose(h);
     std::sort(dirs.begin(), dirs.end()); std::sort(files.begin(), files.end());
-    for (auto& f : files) AddMkv(JoinPath(dir, f), nullptr, nullptr, L"");
+    for (auto& f : files) { if (abort_ && *abort_) return; AddMkv(JoinPath(dir, f), nullptr, nullptr, L""); }
     if (depth < 3) for (auto& d : dirs) ScanDir(JoinPath(dir, d), depth + 1);
 }
 
@@ -179,16 +181,92 @@ void Library::Stop() { stop_ = true; if (th_.joinable()) th_.join(); stop_ = fal
 
 void Library::Rescan(const std::vector<std::wstring>& folders, HWND notify, UINT msg) {
     Stop();
-    {
-        std::lock_guard<std::mutex> g(mx_);
-        clips_.clear(); divas_.clear(); problems_.clear(); shows_.clear(); clipShow_.clear(); ++gen_;
-        shows_.reserve(256);                              // AddMkv keeps pointers into shows_ during the scan
-        for (auto& root : folders) if (DirExists(root)) ScanDir(root, 0);
-        Group();
-        Log("library: %zu divas, %zu clips, %zu problems", divas_.size(), clips_.size(), problems_.size());
-    }
-    int gen = gen_;
-    th_ = std::thread([this, notify, msg, gen] { Worker(notify, msg, gen); });
+    scanning_ = true;
+    th_ = std::thread([this, folders, notify, msg] {
+        bool com = SUCCEEDED(CoInitializeEx(nullptr, COINIT_MULTITHREADED));
+        double t0 = NowSeconds();
+        Library* scratch = new Library;                   // scanned off to the side: the UI keeps showing the old library meanwhile
+        scratch->abort_ = &stop_;
+        scratch->shows_.reserve(256);                     // AddMkv keeps pointers into shows_ during the scan
+        for (auto& root : folders) if (DirExists(root)) scratch->ScanDir(root, 0);
+        bool aborted = stop_;
+        if (!aborted) scratch->Group();
+        int gen;
+        {
+            std::lock_guard<std::mutex> g(mx_);
+            if (!aborted) { clips_.swap(scratch->clips_); divas_.swap(scratch->divas_); problems_.swap(scratch->problems_); shows_.swap(scratch->shows_); clipShow_.swap(scratch->clipShow_); ++gen_; }
+            gen = gen_;
+        }
+        delete scratch;
+        lastScanS_ = NowSeconds() - t0; scanning_ = false;
+        if (aborted) { if (com) CoUninitialize(); return; }
+        { std::lock_guard<std::mutex> g(mx_); Log("library: %zu divas, %zu clips, %zu problems (scan %.0f ms, %zu folders)", divas_.size(), clips_.size(), problems_.size(), lastScanS_ * 1000, folders.size()); }
+        if (notify) PostMessageW(notify, msg, 0, (LPARAM)gen);
+        if (com) CoUninitialize();
+        Worker(notify, msg, gen);
+    });
+}
+bool Library::WaitScan(double seconds) {
+    double until = NowSeconds() + seconds;
+    while (scanning_ && NowSeconds() < until) Sleep(10);
+    return !scanning_;
+}
+
+void Library::Unwatch() {
+    if (wstop_) SetEvent(wstop_);
+    if (wth_.joinable()) wth_.join();
+    if (wstop_) { CloseHandle(wstop_); wstop_ = nullptr; }
+    watched_.clear();
+}
+void Library::Watch(const std::vector<std::wstring>& foldersIn, HWND notify, UINT msg) {
+    std::vector<std::wstring> folders; for (auto& f : foldersIn) if (DirExists(f)) folders.push_back(f);
+    if (folders == watched_ && wth_.joinable()) return;
+    Unwatch();
+    watched_ = folders; if (folders.empty() || !notify) return;
+    wstop_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    HANDLE stop = wstop_;
+    wth_ = std::thread([folders, notify, msg, stop] {
+        struct W { HANDLE dir = INVALID_HANDLE_VALUE; OVERLAPPED ov{}; alignas(DWORD) BYTE buf[16384]; std::wstring path; };
+        std::vector<std::unique_ptr<W>> ws;
+        auto arm = [](W& w) { DWORD got = 0; ResetEvent(w.ov.hEvent);
+            return ReadDirectoryChangesW(w.dir, w.buf, sizeof(w.buf), TRUE, FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_DIR_NAME | FILE_NOTIFY_CHANGE_LAST_WRITE | FILE_NOTIFY_CHANGE_SIZE, &got, &w.ov, nullptr) != FALSE; };
+        for (auto& f : folders) {
+            auto w = std::make_unique<W>(); w->path = f;
+            w->dir = CreateFileW(f.c_str(), FILE_LIST_DIRECTORY, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OVERLAPPED, nullptr);
+            if (w->dir == INVALID_HANDLE_VALUE) continue;
+            w->ov.hEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+            if (!arm(*w)) { CloseHandle(w->ov.hEvent); CloseHandle(w->dir); continue; }
+            ws.push_back(std::move(w));
+        }
+        Log("library: watching %zu of %zu folders", ws.size(), folders.size());
+        auto relevant = [](const std::wstring& n) {                   // clips, their sidecars and artwork; a new folder can hold any of them
+            std::wstring l = n; for (auto& c : l) c = (wchar_t)towlower(c);
+            size_t dot = l.rfind(L'.'), slash = l.find_last_of(L"\\/");
+            if (dot == std::wstring::npos || (slash != std::wstring::npos && dot < slash)) return true;
+            std::wstring e = l.substr(dot);
+            return e == L".mkv" || e == L".json" || e == L".png" || e == L".jpg" || e == L".jpeg";
+        };
+        std::vector<HANDLE> hs; hs.push_back(stop); for (auto& w : ws) hs.push_back(w->ov.hEvent);
+        bool pending = false;
+        for (;;) {
+            DWORD r = WaitForMultipleObjects((DWORD)hs.size(), hs.data(), FALSE, pending ? 2000 : INFINITE);
+            if (r == WAIT_OBJECT_0) break;
+            if (r == WAIT_TIMEOUT) { pending = false; Log("library: folder changed -> rescan"); PostMessageW(notify, msg, 0, 0); continue; }
+            size_t i = r - WAIT_OBJECT_0 - 1; if (i >= ws.size()) break;
+            W& w = *ws[i]; DWORD got = 0;
+            if (GetOverlappedResult(w.dir, &w.ov, &got, FALSE)) {
+                if (!got) pending = true;                                // buffer overflow: something changed, details lost
+                for (DWORD off = 0; got && off < got;) {
+                    auto* fn = (FILE_NOTIFY_INFORMATION*)(w.buf + off);
+                    if (relevant(std::wstring(fn->FileName, fn->FileNameLength / sizeof(wchar_t)))) pending = true;
+                    if (!fn->NextEntryOffset) break;
+                    off += fn->NextEntryOffset;
+                }
+            }
+            if (!arm(w)) { Log("library: stopped watching %s", WToUtf8(w.path).c_str()); hs.erase(hs.begin() + 1 + i); CloseHandle(w.ov.hEvent); CloseHandle(w.dir); ws.erase(ws.begin() + i); }
+        }
+        for (auto& w : ws) { CancelIoEx(w->dir, &w->ov); DWORD got; GetOverlappedResult(w->dir, &w->ov, &got, TRUE); CloseHandle(w->ov.hEvent); CloseHandle(w->dir); }
+    });
 }
 
 void Library::Worker(HWND notify, UINT msg, int gen) {

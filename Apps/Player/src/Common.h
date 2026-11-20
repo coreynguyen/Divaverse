@@ -35,3 +35,18 @@ using CtxLock = std::recursive_mutex;
 
 // Monotonic seconds (QPC)
 double NowSeconds();
+
+#define DV_VERSION_W L"0.13.0"
+#define DV_VERSION   "0.13.0"
+
+// Writes the whole file to <path>.tmp, flushes it, then swaps it in with one rename. A crash or power cut leaves
+// either the old file or the new one, never a truncated mix.
+bool WriteFileAtomic(const std::wstring& path, const void* data, size_t n);
+inline bool WriteFileAtomic(const std::wstring& path, const std::string& s) { return WriteFileAtomic(path, s.data(), s.size()); }
+
+// Crash capture: an unhandled exception (and abort / pure call / invalid CRT parameter) writes
+// %LOCALAPPDATA%\Divaverse\crash\crash-<time>.dmp plus a .txt with the faulting module and the log tail.
+void CrashInstall();
+std::wstring CrashDir();
+uint64_t NewestCrashTime(std::wstring* dmp = nullptr);     // FILETIME of the newest dump (0 = none)
+uint64_t FileWriteTime(const std::wstring& p);

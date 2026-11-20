@@ -16,7 +16,13 @@ enum Cmd : UINT {
     ID_OPEN_UI = 1000, ID_PLAYPAUSE, ID_NEXT, ID_PREV, ID_SHOWHIDE, ID_EDIT, ID_MUSIC_TOGGLE, ID_MUSIC_NEXT, ID_UNSTAGE, ID_EXIT,
     ID_LOCK, ID_CLICKTHROUGH, ID_PANIC, ID_MUSIC_PREV, ID_MUSIC_PAUSE,
 };
-constexpr UINT WM_APP_TRAY = WM_APP + 1, WM_APP_POSTER = WM_APP + 2, WM_APP_SHOWUI = WM_APP + 3;
+constexpr UINT WM_APP_TRAY = WM_APP + 1, WM_APP_POSTER = WM_APP + 2, WM_APP_SHOWUI = WM_APP + 3, WM_APP_LIBCHANGED = WM_APP + 4;
+
+// Global shortcuts the user can rebind (Settings -> Shortcuts). Stored as (MOD_* << 16) | virtual key; 0 = unbound.
+enum HotAction { HA_HIDE, HA_PAUSE, HA_NEXT, HA_PREV, HA_EDIT, HA_PERF, HA_QUIT, HA_COUNT };
+const wchar_t* HotActionName(int a);
+std::wstring HotkeyText(uint32_t packed);
+uint32_t HotkeyDefault(int a);
 
 struct Settings {
     int x = INT_MIN, bottom = INT_MIN;     // where the clip's ground anchor sits on screen: x, and the y of the floor line
@@ -33,8 +39,17 @@ struct Settings {
     int decodeMode = 0;                    // 0 auto, 1 GPU, 2 CPU
     bool hwBad = false, dcompBad = false;  // learned by the playback watchdog on this machine
     std::wstring last; std::vector<std::wstring> folders;
+    uint32_t hotkeys[HA_COUNT] = {};
+    bool perfHud = false;                  // playback statistics beside the performer
+    uint64_t crashSeen = 0;                // newest crash report already announced
+    int schedFrom = -1, schedTo = -1;      // on stage only between these hours (local time, -1 = always)
+    int idleShow = 0;                      // minutes without input after which a hidden performer comes out (0 = off)
+    // Placement per monitor arrangement: layout key -> "x,bottom,scale". `layout` is the arrangement right now.
+    std::vector<std::pair<std::wstring, std::wstring>> displays; std::wstring layout;
     bool noSave = false;
-    void Load(); void Save() const;
+    void Load(); void Save();
+    void RememberPlacement();              // store x / bottom / scale for `layout`
+    bool RecallPlacement(const std::wstring& key);
 };
 
 class App {
@@ -87,6 +102,15 @@ public:
     void Notify(const std::wstring& title, const std::wstring& text);
     void Quit();
     static bool Autostart(); static void SetAutostart(bool on);
+    bool SetHotkey(int action, uint32_t packed);   // false: another program holds that combination (the old one stays)
+    void SetPerfHud(bool on);
+    std::wstring ExportDiagnostics();      // folder with report, logs, settings, newest crash; "" on failure
+    void StartGpuTrace();                  // GPU decode on, 20 s of decoder tracing, then a diagnostics export
+    // Saved clip playlists (%APPDATA%\Divaverse\ClipPlaylists\<name>.m3u8)
+    std::vector<std::wstring> ClipPlaylists() const; bool SaveClipPlaylist(const std::wstring& name); bool LoadClipPlaylist(const std::wstring& name, bool play);
+    void DeleteClipPlaylist(const std::wstring& name);
+    struct PerfStats { double fps = 0, decodeMs = 0, presentMs = 0; uint64_t dropped = 0, unpaired = 0; int queued = 0; bool gpu = false; const char* stage = ""; int64_t frame = 0; };
+    PerfStats Perf() const;
 
 private:
     static LRESULT CALLBACK WndProcThunk(HWND h, UINT m, WPARAM w, LPARAM l);
@@ -98,7 +122,9 @@ private:
     void UpdateSuspend(); void UpdateOverlayVisibility();
     void ShowTrayMenu(POINT pt);
     void TrayAdd(); void TrayUpdate(); void TrayRemove();
-    void PollFullscreen(double now); void PollPointer(); void UpdateMediaKeys(); void RegisterHotkeys(); void StageSize(int& w, int& h) const;
+    void PollFullscreen(double now); void PollSchedule(double now); std::wstring LayoutKey() const; void OnDisplayChange();
+    bool sleeping_ = false, displayOff_ = false, locked_ = false, schedHidden_ = false, idleShown_ = false; double lastSched_ = 0, presentMs_ = 0, fpsEst_ = 0, lastPresentT_ = 0;
+    double traceUntil_ = 0; HPOWERNOTIFY powerNote_ = nullptr; void PollPointer(); void UpdateMediaKeys(); void RegisterHotkeys(); void StageSize(int& w, int& h) const;
     bool WantHw() const;
     void SelftestFinish();
     double MediaTime(double now) const { return suspended_ ? suspendMedia_ : now - clockOrigin_; }
@@ -123,6 +149,7 @@ private:
     // internal QA hooks (not part of the user experience)
     std::wstring selftest_; double selftestStart_ = 0, selftestSecs_ = 3.0; bool selftestRequested_ = false; uint64_t presented_ = 0;
     std::vector<std::pair<std::wstring, std::wstring>> expect_;
+    std::wstring qaLibDir_; double qaLibSecs_ = 0; bool qaHud_ = false;
     std::wstring qaWheel_; int qaDrop_ = 0; bool qaHw_ = false; int qaSeek_ = -1, qaSeekWait_ = -1, qaSeekLanded_ = -1;
 };
 extern App* g_app;
@@ -138,6 +165,8 @@ bool UiScreenshot(const std::wstring& bmpPath, int page);
 // Wet-Rash mini game (WetRash.cpp)
 void WetRashOpen(); void WetRashClose(); bool WetRashShot(const std::wstring& bmpPath, int scene);   // QA: render a page and save the window pixels
 
+// Playback statistics beside the performer (PerfHud.cpp)
+void PerfHudShow(bool on); void PerfHudTick(double now);
 // Tray flyout (Flyout.cpp)
 struct FlyItem { UINT id; std::wstring text; int icon; bool checked = false, enabled = true, sep = false; std::wstring hint; };
 void FlyoutShow(HWND owner, POINT anchor, std::vector<FlyItem> items);   // posts WM_COMMAND(id) to owner on pick

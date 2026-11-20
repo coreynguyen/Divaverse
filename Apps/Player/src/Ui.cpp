@@ -39,6 +39,8 @@ struct UiState {
     std::wstring search; bool searchFocus = false; int filter = 0; std::wstring detailKey; bool infoOpen = false;
     std::unordered_map<std::wstring, ComPtr<ID2D1Bitmap>> songArt; int plSel = -1, sort = 0;
     std::vector<ComPtr<ID2D1Bitmap>> banners; std::wstring tagText; bool tagFocus = false;
+    int hkCapture = -1;                                  // Settings -> Shortcuts: action waiting for a key combination
+    std::wstring plName; bool plFocus = false;           // On Stage -> name for "save the queue as a playlist"
     struct Loot { std::wstring key, name; int fresh; bool wholeNew; }; std::vector<Loot> loot; double lootT = 0; int lootGen = -1; bool lootBurst = false;
     std::function<void()> pendingLoot, deferred;
     double pageT = 0, ripT = -10; float ripX = 0, ripY = 0; float scrub = -1;
@@ -665,6 +667,29 @@ float PageStage(const RectF& a) {
             }
             yy += 20;
         }
+        // saved clip playlists: the clip on stage plus the queue, stored as .m3u8 in %APPDATA%\Divaverse\ClipPlaylists
+        auto lists = A.ClipPlaylists(); float px = a.left;
+        RectF in = RF(px, yy, 220, 32); C().FillRR(in, 16, Alpha(P().text, 0.06f)); C().StrokeRR(in, 16, U.plFocus ? P().accent : P().border, 1);
+        if (U.plName.empty() && !U.plFocus) C().Text(L"Playlist name", RF(in.left + 14, in.top, 200, 32), 12, P().faint);
+        else { C().Text(U.plName, RF(in.left + 14, in.top, 196, 32), 12.5f, P().text); if (U.plFocus) { U.animating = true; if (std::fmod(U.t, 1.0) < 0.55) { float tx = in.left + 15 + std::min(190.f, C().TextW(U.plName, 12.5f)); C().Line(tx, in.top + 8, tx, in.bottom - 8, P().text, 1.2f); } } }
+        AddHit(in, 370, [] { U.plFocus = true; UiInvalidate(); });
+        Button(371, RF(px + 230, yy, 150, 32), L"Save as playlist", I_ADD, B_SOFT, [] { if (g_app->SaveClipPlaylist(U.plName)) { UiToast(L"Saved playlist " + U.plName); U.plName.clear(); } else UiToast(U.plName.empty() ? L"Type a name first" : L"Nothing on stage or in the queue to save"); UiInvalidate(); },
+               A.OnStage() || !q.empty());
+        yy += 44;
+        if (!lists.empty()) {
+            float cx = a.left;
+            for (size_t i = 0; i < lists.size() && i < 24; ++i) {
+                float tw = C().TextW(lists[i], 12.5f, true) + 84; if (cx + tw > a.right) { cx = a.left; yy += 40; }
+                RectF chip = RF(cx, yy, tw, 32); C().FillRR(chip, 16, Mix(P().card, P().text, Hot(7400 + (int)i * 2) ? 0.14f : 0.07f));
+                C().Text(lists[i], RF(chip.left + 14, chip.top, tw - 80, 32), 12.5f, P().text, 0, true);
+                std::wstring nm = lists[i];
+                AddHit(RF(chip.left, chip.top, tw - 64, 32), 7400 + (int)i * 2, [nm] { if (g_app->LoadClipPlaylist(nm, true)) UiToast(L"Playing " + nm); else UiToast(L"None of the clips in " + nm + L" were found"); });
+                Button(7401 + (int)i * 2, RF(chip.right - 34, chip.top + 2, 28, 28), L"", I_CLOSE, B_GHOST, [nm] { g_app->DeleteClipPlaylist(nm); UiToast(L"Deleted " + nm); });
+                C().IconAt(I_PLAY, chip.right - 50, chip.top + 16, 11, P().accent, 1.4f);
+                cx += tw + 8;
+            }
+            yy += 48;
+        }
     }
     if (A.set.editor && A.Cur()) {                    // creator values of this clip, adjustable live, stored as a sidecar override
         const ClipDesc cd2 = *A.Cur(); SectionTitle(a.left, yy, L"EDITOR: AUTHORED SCALE (SAVED BESIDE THE CLIP, NEVER INTO IT)");
@@ -886,14 +911,41 @@ float PageSettings(const RectF& a) {
       Button(529, RF(card.right - 126, yy - 44, 110, 36), L"Browse", I_FOLDER, B_SOFT, [] { std::wstring d = PickFolder(); if (!d.empty()) g_app->AddLibraryFolder(d); });
       y = yy + 26; }
     SectionTitle(a.left, y, L"SHORTCUTS");
-    { static const wchar_t* k[][2] = { { L"Hide everything now (performer, this window, music), press again to bring her back", L"Ctrl + Alt + H" }, { L"Play / pause the performer", L"Ctrl + Alt + P" }, { L"Next clip / previous clip", L"Ctrl + Alt + N / B" },
-                                       { L"Move and resize", L"Ctrl + Alt + E" }, { L"Music: play / pause, next, previous, stop", L"Media keys" }, { L"Exit", L"Ctrl + Alt + Q" } };
-      const int n = 6; RectF card = RF(a.left, y, RW(a), 44.f * n); Card(card);
-      for (int i = 0; i < n; ++i) { float tw = C().TextW(k[i][1], 12, true) + 22; RectF kc = RF(card.right - 18 - tw, y + 44 * i + 10, tw, 24);
-          C().Text(k[i][0], RF(card.left + 22, y + 44 * i, RW(card) - tw - 60, 44), 13.5f, P().text);
-          C().FillRR(kc, 7, Mix(P().card, P().text, 0.08f)); C().Text(k[i][1], kc, 12, i == 0 ? P().accent : P().dim, 1, true);
-          if (i < n - 1) C().Line(card.left + 22, y + 44 * (i + 1), card.right - 16, y + 44 * (i + 1), P().border, 1); }
-      y += 44 * n + 26; }
+    { const int n = HA_COUNT + 1; RectF card = RF(a.left, y, RW(a), 44.f * n + 56); Card(card);
+      for (int i = 0; i < n; ++i) {
+          bool media = i == HA_COUNT; bool cap = !media && U.hkCapture == i;
+          std::wstring keys = media ? L"Media keys" : cap ? L"Press the new keys...  Esc cancels, Backspace clears" : HotkeyText(A.set.hotkeys[i]);
+          float tw = C().TextW(keys, 12, true) + 22; RectF kc = RF(card.right - 18 - tw, y + 44 * i + 10, tw, 24);
+          C().Text(media ? L"Music: play / pause, next, previous, stop" : HotActionName(i), RF(card.left + 22, y + 44 * i, RW(card) - tw - 60, 44), 13.5f, P().text);
+          C().FillRR(kc, 7, cap ? Alpha(P().accent, 0.22f) : Mix(P().card, P().text, Hot(560 + i) ? 0.14f : 0.08f)); C().Text(keys, kc, 12, cap || i == HA_HIDE ? P().accent : P().dim, 1, true);
+          if (cap) { C().StrokeRR(kc, 7, P().accent, 1.2f); U.animating = true; }
+          if (!media) AddHit(RF(card.left, y + 44 * i, RW(card), 44), 560 + i, [i] { U.hkCapture = i; UiInvalidate(); });
+          C().Line(card.left + 22, y + 44 * (i + 1), card.right - 16, y + 44 * (i + 1), P().border, 1);
+      }
+      Button(569, RF(card.left + 20, y + 44 * n + 10, 170, 34), L"Restore defaults", I_REFRESH, B_GHOST, [] { int bad = 0;
+          for (int k = 0; k < HA_COUNT; ++k) g_app->SetHotkey(k, 0);
+          for (int k = 0; k < HA_COUNT; ++k) if (!g_app->SetHotkey(k, HotkeyDefault(k))) ++bad;
+          UiToast(bad ? Fmt(L"%d default shortcuts are taken by other programs", bad) : std::wstring(L"Shortcuts restored")); UiInvalidate(); });
+      C().Text(L"Click a shortcut, then press the new combination.", RF(card.left + 204, y + 44 * n + 10, RW(card) - 224, 34), 11.5f, P().faint);
+      y += 44.f * n + 56 + 26; }
+    SectionTitle(a.left, y, L"SCHEDULE");
+    { auto& S = A.set; bool on = S.schedFrom >= 0 && S.schedTo >= 0; RectF card = RF(a.left, y, RW(a), 62.f * 2 + (on ? 52 : 0)); Card(card); float yy = y;
+      auto stepper = [&](int id, float right, float cy, const std::wstring& text, std::function<void(int)> fn) {     // [-] value [+], `right` = its right edge
+          Button(id, RF(right - 150, cy - 16, 32, 32), L"-", -1, B_SOFT, [fn] { fn(-1); });
+          C().Text(text, RF(right - 116, cy - 16, 82, 32), 13, P().text, 1, true);
+          Button(id + 1, RF(right - 32, cy - 16, 32, 32), L"+", -1, B_SOFT, [fn] { fn(1); }); };
+      Row(card, yy, I_SUN, L"On stage only between set hours", on ? Fmt(L"%02d:00 to %02d:00; off stage the rest of the day", S.schedFrom, S.schedTo) : std::wstring(L"Off: she stays whenever you put her on stage"));
+      Toggle(570, card.right - 20, yy - 31, on, [on] { auto& T = g_app->set; if (on) { T.schedFrom = T.schedTo = -1; } else { T.schedFrom = 18; T.schedTo = 23; } T.Save(); UiInvalidate(); });
+      if (on) {
+          Row(card, yy, I_REFRESH, L"Hours", L"");
+          C().Text(L"from", RF(card.right - 420, yy - 52, 50, 52), 12, P().dim, 2);
+          stepper(571, card.right - 210, yy - 26, Fmt(L"%02d:00", S.schedFrom), [](int d) { auto& T = g_app->set; T.schedFrom = (T.schedFrom + d + 24) % 24; T.Save(); UiInvalidate(); });
+          C().Text(L"to", RF(card.right - 200, yy - 52, 24, 52), 12, P().dim, 2);
+          stepper(573, card.right - 20, yy - 26, Fmt(L"%02d:00", S.schedTo), [](int d) { auto& T = g_app->set; T.schedTo = (T.schedTo + d + 24) % 24; T.Save(); UiInvalidate(); });
+      }
+      Row(card, yy, I_MOON, L"Come out while the PC is idle", S.idleShow ? Fmt(L"After %d min without mouse or keyboard; back off stage when you return", S.idleShow) : std::wstring(L"Off"), false);
+      stepper(575, card.right - 20, yy - 31, S.idleShow ? Fmt(L"%d min", S.idleShow) : L"Off", [](int d) { auto& T = g_app->set; static const int st[] = { 0, 1, 2, 5, 10, 15, 30, 60 }; int k = 0; for (int q = 0; q < 8; ++q) if (st[q] <= T.idleShow) k = q; k = std::clamp(k + d, 0, 7); T.idleShow = st[k]; T.Save(); UiInvalidate(); });
+      y = yy + 26; }
     SectionTitle(a.left, y, L"DIAGNOSTICS");
     { std::wstring d = A.DiagText(); int lines = 1; for (wchar_t ch : d) if (ch == L'\n') ++lines;
       float th = lines * 19.f + 8; RectF card = RF(a.left, y, RW(a), th + 78); Card(card);
@@ -902,8 +954,12 @@ float PageSettings(const RectF& a) {
       Button(540, RF(card.left + 20, by, 140, 36), L"Copy report", I_COPY, B_SOFT, [] {
           std::wstring s = g_app->DiagText() + L"\r\n--- log ---\r\n"; for (auto& l : LogTail(120)) s += Utf8ToW(l) + L"\r"; CopyText(s); UiToast(L"Report copied to the clipboard"); });
       Button(541, RF(card.left + 170, by, 150, 36), L"Open log folder", I_FOLDER, B_GHOST, [] { ShellExecuteW(nullptr, L"open", LogDir().c_str(), nullptr, nullptr, SW_SHOWNORMAL); });
+      Button(542, RF(card.left + 330, by, 180, 36), L"Export diagnostics", I_FOLDER, B_SOFT, [] { std::wstring d = g_app->ExportDiagnostics();
+          if (d.empty()) UiToast(L"Could not write the diagnostics folder"); else { ShellExecuteW(nullptr, L"open", d.c_str(), nullptr, nullptr, SW_SHOWNORMAL); UiToast(L"Diagnostics collected"); } });
+      Button(543, RF(card.left + 520, by, 190, 36), A.set.perfHud ? L"Hide performance" : L"Show performance", I_CHIP, B_GHOST, [] { g_app->SetPerfHud(!g_app->set.perfHud); });
+      Button(544, RF(card.left + 720, by, 190, 36), L"Record GPU trace", I_CHIP, B_GHOST, [] { g_app->StartGpuTrace(); }, A.OnStage());
       y += th + 78 + 26; }
-    C().Text(L"Divaverse 0.6", RF(a.left, y, RW(a), 24), 12, P().faint);
+    C().Text(L"Divaverse " DV_VERSION_W, RF(a.left, y, RW(a), 24), 12, P().faint);
     return y + 40;
 }
 
@@ -1055,7 +1111,7 @@ void PaintAll() {
     }
     
     {   // arcade: the Wet-Rash mini game
-        RectF r = RF(12, navY + PG_COUNT * 46.f + 14, RAIL - 24, 54); int id = 98; float h = Anim(id, Hot(id) ? 1.f : 0.f);
+        RectF r = RF(12, navY + (float)PG_COUNT * 46.f + 14, RAIL - 24, 54); int id = 98; float h = Anim(id, Hot(id) ? 1.f : 0.f);
         c.Grad3RR(r, 12, Hex(0x1E88E5, 0.55f + 0.25f * h), Hex(0x4FD6FF, 0.40f + 0.2f * h), Hex(kPink, 0.45f + 0.25f * h), 20.f); c.StrokeRR(r, 12, Hex(0xFFFFFF, 0.25f + 0.4f * h), 1);
         for (int k = 0; k < 3; ++k) c.Arc(r.left + 30 + k * 2.f, r.bottom + 6 - k * 7.f, 16, 205 + (float)std::sin(U.t * 2 + k) * 6, 335, Hex(0xFFFFFF, 0.55f), 2);
         c.Text(L"WET-RASH", RF(r.left + 56, r.top + 6, RW(r) - 60, 24), 14.5f, Hex(0xFFFFFF), 0, true); c.Text(L"jet-ski brawl racer", RF(r.left + 56, r.top + 28, RW(r) - 60, 18), 10.5f, Hex(0xFFFFFF, 0.85f));
@@ -1134,12 +1190,14 @@ LRESULT CALLBACK UiProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
         TRACKMOUSEEVENT t{ sizeof(t), TME_LEAVE, h, 0 }; TrackMouseEvent(&t);
         return 0; }
     case WM_MOUSELEAVE: if (U.hover != -1) { U.hover = -1; InvalidateRect(h, nullptr, FALSE); } return 0;
-    case WM_SETCURSOR: if (LOWORD(lp) == HTCLIENT) { SetCursor(LoadCursorW(nullptr, U.hover == 120 || U.hover == 250 ? IDC_IBEAM : U.hover >= 0 ? IDC_HAND : IDC_ARROW)); return TRUE; } break;
+    case WM_SETCURSOR: if (LOWORD(lp) == HTCLIENT) { SetCursor(LoadCursorW(nullptr, U.hover == 120 || U.hover == 250 || U.hover == 370 ? IDC_IBEAM : U.hover >= 0 ? IDC_HAND : IDC_ARROW)); return TRUE; } break;
     case WM_LBUTTONDOWN: {
         float s = U.cv.Scale(); U.mx = GET_X_LPARAM(lp) / s; U.my = GET_Y_LPARAM(lp) / s;
         int i = HitAt(U.mx, U.my);
         if (i < 0 || U.hits[i].id != 120) U.searchFocus = false;
         if (i < 0 || U.hits[i].id != 250) U.tagFocus = false;
+        if (i < 0 || U.hits[i].id != 370) U.plFocus = false;
+        if (i < 0 || U.hits[i].id < 560 || U.hits[i].id >= 560 + HA_COUNT) U.hkCapture = -1;
         if (i >= 0) { U.down = U.hits[i].id; SetCapture(h); if (U.hits[i].drag) { auto f = U.hits[i].drag; f(U.mx); } else { U.ripX = U.mx; U.ripY = U.my; U.ripT = NowSeconds(); SfxPlay(SFX_CLICK); } }
         InvalidateRect(h, nullptr, FALSE);
         return 0; }
@@ -1160,6 +1218,14 @@ LRESULT CALLBACK UiProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
         } else { int sp = ScrollSlot(); U.scroll[sp] = std::clamp(U.scroll[sp] - steps * 80.f, 0.f, U.maxScroll); }
         InvalidateRect(h, nullptr, FALSE); return 0; }
     case WM_CHAR:
+        if (U.hkCapture >= 0) return 0;
+        if (U.plFocus) {
+            if (wp == 8) { if (!U.plName.empty()) U.plName.pop_back(); }
+            else if (wp == 27) { U.plName.clear(); U.plFocus = false; }
+            else if (wp == 13) { if (g_app->SaveClipPlaylist(U.plName)) { UiToast(L"Saved playlist " + U.plName); U.plName.clear(); U.plFocus = false; } else UiToast(L"Nothing to save, or the name is empty"); }
+            else if (wp >= 32 && U.plName.size() < 40 && !wcschr(L"\\/:*?\"<>|", (wchar_t)wp)) U.plName.push_back((wchar_t)wp);
+            InvalidateRect(h, nullptr, FALSE); return 0;
+        }
         if (U.tagFocus) {
             if (wp == 8) { if (!U.tagText.empty()) U.tagText.pop_back(); }
             else if (wp == 27) { U.tagText.clear(); U.tagFocus = false; }
@@ -1176,8 +1242,25 @@ LRESULT CALLBACK UiProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
             U.scroll[ScrollSlot()] = 0; InvalidateRect(h, nullptr, FALSE);
         }
         return 0;
+    case WM_SYSKEYDOWN:
+        if (U.hkCapture < 0) break;
+        [[fallthrough]];
     case WM_KEYDOWN:
-        if (U.searchFocus || U.tagFocus) return 0;
+        if (U.hkCapture >= 0) {                         // rebinding a shortcut: the next non-modifier key, with whatever modifiers are held
+            UINT vk = (UINT)wp; int a = U.hkCapture;
+            if (vk == VK_CONTROL || vk == VK_MENU || vk == VK_SHIFT || vk == VK_LWIN || vk == VK_RWIN) return 0;
+            if (vk == VK_ESCAPE) { U.hkCapture = -1; InvalidateRect(h, nullptr, FALSE); return 0; }
+            if (vk == VK_BACK || vk == VK_DELETE) { g_app->SetHotkey(a, 0); U.hkCapture = -1; UiToast(std::wstring(HotActionName(a)) + L": no shortcut"); InvalidateRect(h, nullptr, FALSE); return 0; }
+            UINT mods = ((GetKeyState(VK_CONTROL) & 0x8000) ? MOD_CONTROL : 0) | ((GetKeyState(VK_MENU) & 0x8000) ? MOD_ALT : 0) | ((GetKeyState(VK_SHIFT) & 0x8000) ? MOD_SHIFT : 0) |
+                        (((GetKeyState(VK_LWIN) | GetKeyState(VK_RWIN)) & 0x8000) ? MOD_WIN : 0);
+            bool fkey = vk >= VK_F1 && vk <= VK_F24;
+            if (!(mods & (MOD_CONTROL | MOD_ALT | MOD_WIN)) && !fkey) { UiToast(L"Use Ctrl, Alt or Win with the key (or an F key), so typing elsewhere is not caught"); return 0; }
+            uint32_t k = ((uint32_t)mods << 16) | vk;
+            if (g_app->SetHotkey(a, k)) UiToast(std::wstring(HotActionName(a)) + L": " + HotkeyText(k));
+            else UiToast(HotkeyText(k) + L" is already used by another program or another Divaverse shortcut");
+            U.hkCapture = -1; InvalidateRect(h, nullptr, FALSE); return 0;
+        }
+        if (U.searchFocus || U.tagFocus || U.plFocus) return 0;
         if (!U.loot.empty()) { if (wp == VK_ESCAPE || wp == VK_RETURN || wp == VK_SPACE) { if (U.t - U.lootT < 0.95) U.lootT = U.t - 0.95; else LootNext(false); InvalidateRect(h, nullptr, FALSE); } return 0; }
         if ((GetKeyState(VK_CONTROL) & 0x8000) && wp >= '1' && wp <= '4') GoPage((int)(wp - '1'));
         else if ((GetKeyState(VK_CONTROL) & 0x8000) && wp == 'F') { GoPage(PG_LIBRARY); U.searchFocus = true; }
@@ -1264,6 +1347,7 @@ bool UiScreenshot(const std::wstring& path, int page) {
     if (page == 20) { U.page = PG_LIBRARY; std::lock_guard<std::mutex> g(g_app->lib.Mutex()); if (!g_app->lib.Divas().empty()) U.detailKey = g_app->lib.Divas()[0].key; }
     if (page == 21) { U.page = PG_LIBRARY; g_app->set.cardMode = 0; }
     if (page == 22) { U.page = PG_STAGE; U.infoOpen = true; }
+    if (page == 23 || page == 24) { U.page = PG_SETTINGS; U.scroll[ScrollSlot()] = page == 23 ? 1180.f : 99999.f; if (page == 24) U.hkCapture = HA_PERF; }     // settings: shortcuts + schedule, diagnostics
     if (page == 30 || page == 31) { U.page = PG_LIBRARY; U.loot.clear(); std::lock_guard<std::mutex> g(g_app->lib.Mutex()); if (!g_app->lib.Divas().empty()) { auto& dv = g_app->lib.Divas()[0]; U.loot.push_back({ dv.key, dv.name, (int)dv.clips.size(), true }); U.lootGen = g_app->lib.Generation(); U.lootT = NowSeconds() - (page == 31 ? 2.0 : 0.6); U.lootBurst = true; } }
     for (int i = 0; i < 12; ++i) { RedrawWindow(U.h, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW); Sleep(20); }
     RECT rc; GetClientRect(U.h, &rc); int w = rc.right, hgt = rc.bottom;

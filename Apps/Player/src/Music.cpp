@@ -19,11 +19,7 @@ std::wstring Stem(const std::wstring& p) {
 std::wstring NameOf(const std::wstring& p) { std::wstring n = Stem(p); for (auto& c : n) if (c == L'_') c = L' '; return n; }
 std::wstring Ext(const std::wstring& p) { size_t dot = p.rfind(L'.'); std::wstring e = dot == std::wstring::npos ? L"" : p.substr(dot + 1); for (auto& c : e) c = (wchar_t)towlower(c); return e; }
 std::wstring FolderName(const std::wstring& p) { std::wstring d = DirOf(p); size_t s = d.find_last_of(L"\\/"); return s == std::wstring::npos ? d : d.substr(s + 1); }
-void WriteAll(const std::wstring& file, const std::string& out) {
-    HANDLE f = CreateFileW(file.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, 0, nullptr);
-    if (f == INVALID_HANDLE_VALUE) return;
-    DWORD w; WriteFile(f, out.data(), (DWORD)out.size(), &w, nullptr); CloseHandle(f);
-}
+void WriteAll(const std::wstring& file, const std::string& out) { WriteFileAtomic(file, out); }
 std::vector<std::string> Lines(const std::string& txt) {
     std::vector<std::string> v; size_t i = 0;
     while (i < txt.size()) { size_t e = txt.find('\n', i); if (e == std::string::npos) e = txt.size(); std::string l = txt.substr(i, e - i); i = e + 1;

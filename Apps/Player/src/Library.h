@@ -28,11 +28,19 @@ struct LibProblem { std::wstring path; std::string what; };
 
 class Library {
 public:
-    ~Library() { Stop(); }
-    // Synchronous scan (container headers + metadata only), then artwork in the background; `msg` is posted to
-    // `notify` whenever something new is ready. All accessors below must be used under Mutex().
+    ~Library() { Unwatch(); Stop(); }
+    // Scan (container headers + metadata only) and then artwork, both on a worker thread. The previous results stay
+    // visible until the new scan is complete and swapped in; `msg` is posted to `notify` then and whenever artwork
+    // arrives. All accessors below must be used under Mutex().
     void Rescan(const std::vector<std::wstring>& folders, HWND notify, UINT msg);
     void Stop();
+    bool Scanning() const { return scanning_; }
+    bool WaitScan(double seconds);                // QA: block until the scan part is done
+    double LastScanSeconds() const { return lastScanS_; }
+    // Watches the folders (and their subfolders) for clips or artwork being added, removed or changed; after two quiet
+    // seconds `msg` is posted to `notify` once. Calling it again with the same folders keeps the running watch.
+    void Watch(const std::vector<std::wstring>& folders, HWND notify, UINT msg);
+    void Unwatch();
     std::mutex& Mutex() { return mx_; }
     std::vector<LibClip>& Clips() { return clips_; }
     std::vector<LibDiva>& Divas() { return divas_; }
@@ -50,6 +58,9 @@ private:
     std::vector<Show> shows_;                     // legacy manifests met during the scan (diva names / profiles)
     std::vector<int> clipShow_;
     std::mutex mx_; std::thread th_; std::atomic<bool> stop_{false}; int gen_ = 0;
+    std::atomic<bool>* abort_ = nullptr;          // the owning library's stop flag, while scanning into a scratch instance
+    std::atomic<bool> scanning_{false}; double lastScanS_ = 0;
+    std::thread wth_; HANDLE wstop_ = nullptr; std::vector<std::wstring> watched_;
 };
 
 // One frame of a clip as premultiplied BGRA, scaled to targetH. Must run on a thread with COM + MFStartup.

@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.13.0 (Player: robustness, diagnostics, library, shortcuts)
+- Windows CI: GitHub Actions builds `Divaverse.sln` with MSVC, checks the exe imports only system DLLs, and runs
+  playback smoke tests on a Windows runner. Results appear as annotations on the run.
+- Crash capture: minidump + text report (module + offset, log tail) in `%LOCALAPPDATA%\Divaverse\crash`; the next
+  start shows a notice once. `--crashtest` exercises it.
+- Settings > Diagnostics: Export diagnostics (report, logs, settings, newest crash in one folder), performance
+  overlay (fps, decode ms per shown frame, present ms, dropped / unpaired, decode path, frame), Record GPU trace
+  (turns GPU decode on, logs every decoder call for 20 s, then exports).
+- Settings are written atomically as UTF-16 (paths in any script survive). The play queue is now actually saved;
+  it was read but never written.
+- User data and the music library are written atomically.
+- Shortcuts are rebindable (Settings > Shortcuts: click, press the combination; Backspace clears; restore
+  defaults). New action: performance overlay, default Ctrl+Alt+D.
+- Placement is remembered per monitor arrangement: docking / undocking puts her back where she was on that setup.
+- Audio follows the default output device and reopens in place (music keeps its position).
+- Decoding pauses during sleep, display off and a locked session.
+- Schedule: on stage only between set hours; optionally come out after N idle minutes and go back on input.
+- Saved clip playlists on On Stage: name, save (clip on stage + queue), play, delete.
+- Library scan runs in the background and swaps in when done; library folders are watched and rescanned after
+  changes settle for two seconds.
+- Version string shown in Settings and the report comes from one constant.
+
 ## 0.12.0 (hair: weight)
 Measured first: --uishot 54 now logs the tip of a guide strand every frame through a rest / hop / landing / throw
 script, and DIVAVERSE_QA_HAIR switches parts of the solver off. Findings and fixes:

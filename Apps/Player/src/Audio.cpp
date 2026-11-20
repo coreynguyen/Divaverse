@@ -20,8 +20,28 @@ DEFINE_GUID(DV_KSDATAFORMAT_SUBTYPE_IEEE_FLOAT, 0x00000003, 0x0000, 0x0010, 0x80
 
 namespace { std::wstring Hx(HRESULT h) { wchar_t b[16]; swprintf(b, 16, L"0x%08X", (unsigned)h); return b; } }
 
+// Follows the Windows default output: when it changes (headphones plugged in, a USB DAC picked in the volume flyout)
+// or the device disappears, the stream is reopened on the new default with the same format and the source carries on
+// where it was. The engine converts rate / channels (AUTOCONVERTPCM), so the source is never re-prepared.
+struct DeviceWatch final : IMMNotificationClient {
+    std::atomic<bool>* flag; HANDLE event; LONG ref = 1;
+    DeviceWatch(std::atomic<bool>* f, HANDLE e) : flag(f), event(e) {}
+    ULONG STDMETHODCALLTYPE AddRef() override { return InterlockedIncrement(&ref); }
+    ULONG STDMETHODCALLTYPE Release() override { LONG r = InterlockedDecrement(&ref); if (!r) delete this; return r; }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** pp) override {
+        if (riid == __uuidof(IUnknown) || riid == __uuidof(IMMNotificationClient)) { *pp = this; AddRef(); return S_OK; }
+        *pp = nullptr; return E_NOINTERFACE; }
+    HRESULT STDMETHODCALLTYPE OnDefaultDeviceChanged(EDataFlow flow, ERole role, LPCWSTR) override {
+        if (flow == eRender && role == eConsole) { *flag = true; SetEvent(event); } return S_OK; }
+    HRESULT STDMETHODCALLTYPE OnDeviceStateChanged(LPCWSTR, DWORD) override { return S_OK; }
+    HRESULT STDMETHODCALLTYPE OnDeviceAdded(LPCWSTR) override { return S_OK; }
+    HRESULT STDMETHODCALLTYPE OnDeviceRemoved(LPCWSTR) override { return S_OK; }
+    HRESULT STDMETHODCALLTYPE OnPropertyValueChanged(LPCWSTR, const PROPERTYKEY) override { return S_OK; }
+};
+
 struct AudioOut::Impl {
     ComPtr<IAudioClient> client; ComPtr<IAudioRenderClient> render; ComPtr<ISimpleAudioVolume> volume;
+    ComPtr<IMMDeviceEnumerator> en; DeviceWatch* watch = nullptr;
     HANDLE event = nullptr; UINT32 bufFrames = 0;
     bool mf = false, com = false, started = false;
 };
@@ -57,17 +77,29 @@ bool AudioOut::Init(std::wstring& err) {
     d->mf = true;
     if (nullSink_) { rate_ = 48000; ch_ = 2; return src_->Prepare(rate_, ch_, err); }
 
-    ComPtr<IMMDeviceEnumerator> en; ComPtr<IMMDevice> dev;
-    if (FAILED(hr = CoCreateInstance(DV_CLSID_MMDeviceEnumerator, nullptr, CLSCTX_ALL, DV_IID_IMMDeviceEnumerator, (void**)en.GetAddressOf())) ||
-        FAILED(hr = en->GetDefaultAudioEndpoint(eRender, eConsole, &dev)) ||
+    if (FAILED(hr = CoCreateInstance(DV_CLSID_MMDeviceEnumerator, nullptr, CLSCTX_ALL, DV_IID_IMMDeviceEnumerator, (void**)d->en.GetAddressOf()))) { err = L"no audio output device (" + Hx(hr) + L")"; return false; }
+    if (!OpenDevice(0, 0, err)) return false;
+    d->watch = new DeviceWatch(&devChanged_, d->event);
+    if (FAILED(d->en->RegisterEndpointNotificationCallback(d->watch))) { d->watch->Release(); d->watch = nullptr; }
+    return src_->Prepare(rate_, ch_, err);
+}
+
+// rate / ch = 0: take the device's mix format (first open). Otherwise keep the stream format the source was prepared for.
+bool AudioOut::OpenDevice(int keepRate, int keepCh, std::wstring& err) {
+    HRESULT hr; ComPtr<IMMDevice> dev;
+    d->render.Reset(); d->volume.Reset(); d->client.Reset(); d->started = false;
+    if (FAILED(hr = d->en->GetDefaultAudioEndpoint(eRender, eConsole, &dev)) ||
         FAILED(hr = dev->Activate(DV_IID_IAudioClient, CLSCTX_ALL, nullptr, (void**)d->client.GetAddressOf()))) {
         err = L"no audio output device (" + Hx(hr) + L")"; return false; }
-    WAVEFORMATEX* mix = nullptr;
-    if (FAILED(hr = d->client->GetMixFormat(&mix)) || !mix) { err = L"GetMixFormat " + Hx(hr); return false; }
-    // Render straight at the engine's rate and channel count: no resampler in the path. The stream itself is
-    // plain float32; AUTOCONVERTPCM lets the engine take it even when its mix format is extensible / >2 ch layout.
-    int rate = (int)mix->nSamplesPerSec, ch = (int)mix->nChannels;
-    CoTaskMemFree(mix);
+    int rate = keepRate, ch = keepCh;
+    if (!rate) {
+        WAVEFORMATEX* mix = nullptr;
+        if (FAILED(hr = d->client->GetMixFormat(&mix)) || !mix) { err = L"GetMixFormat " + Hx(hr); return false; }
+        // Render straight at the engine's rate and channel count: no resampler in the path. The stream itself is
+        // plain float32; AUTOCONVERTPCM lets the engine take it even when its mix format is extensible / >2 ch layout.
+        rate = (int)mix->nSamplesPerSec; ch = (int)mix->nChannels;
+        CoTaskMemFree(mix);
+    }
     WAVEFORMATEXTENSIBLE wf{};
     wf.Format.wFormatTag = WAVE_FORMAT_EXTENSIBLE; wf.Format.nChannels = (WORD)ch; wf.Format.nSamplesPerSec = (DWORD)rate;
     wf.Format.wBitsPerSample = 32; wf.Format.nBlockAlign = (WORD)(ch * 4); wf.Format.nAvgBytesPerSec = (DWORD)(rate * ch * 4);
@@ -82,7 +114,15 @@ bool AudioOut::Init(std::wstring& err) {
     d->client->GetService(DV_IID_ISimpleAudioVolume, (void**)d->volume.GetAddressOf());
     if (d->volume) d->volume->SetMasterVolume(1.0f, nullptr);      // session volume is process-wide: leave it at unity, gain is per stream
     rate_ = rate; ch_ = ch;
-    return src_->Prepare(rate_, ch_, err);
+    return true;
+}
+bool AudioOut::Reopen(const char* why) {
+    std::wstring err;
+    for (int attempt = 0; attempt < 3 && run_; ++attempt) {
+        if (OpenDevice(rate_, ch_, err)) { if (!paused_) { d->client->Start(); d->started = true; } Log("audio: %s -> reopened on the default device", why); return true; }
+        WaitForSingleObject(d->event, 250);                            // a device being swapped can take a moment to appear
+    }
+    Log("audio: %s -> reopen failed: %s", why, WToUtf8(err).c_str()); return false;
 }
 
 void AudioOut::ThreadMain() {
@@ -107,14 +147,15 @@ void AudioOut::ThreadMain() {
             }
             WaitForSingleObject(d->event, 100);
             if (!run_) break;
+            if (devChanged_.exchange(false)) { if (!Reopen("default output changed")) { failed_ = true; break; } continue; }
             if (pauseDirty_.exchange(false)) { if (paused_) d->client->Stop(); else d->client->Start(); }
             if (paused_ || eof_) continue;
             UINT32 pad = 0;
-            if (FAILED(d->client->GetCurrentPadding(&pad))) { failed_ = true; break; }       // device removed / invalidated
+            if (FAILED(d->client->GetCurrentPadding(&pad))) { if (Reopen("device lost")) continue; failed_ = true; break; }       // device removed / invalidated
             UINT32 avail = d->bufFrames - pad;
             if (!avail) continue;
             BYTE* dst = nullptr;
-            if (FAILED(d->render->GetBuffer(avail, &dst)) || !dst) { failed_ = true; break; }
+            if (FAILED(d->render->GetBuffer(avail, &dst)) || !dst) { if (Reopen("buffer lost")) continue; failed_ = true; break; }
             uint32_t got = src_->Render((float*)dst, avail);
             if (got < avail) { memset((float*)dst + (size_t)got * ch_, 0, (size_t)(avail - got) * ch_ * sizeof(float)); eof_ = true; }
             {   // per-stream gain: perceptual volume curve, optional loudness levelling, soft ceiling
@@ -137,7 +178,8 @@ void AudioOut::ThreadMain() {
     }
     if (d->started) d->client->Stop();
     if (src_) src_->Shutdown();
-    d->volume.Reset(); d->render.Reset(); d->client.Reset();
+    if (d->watch) { d->en->UnregisterEndpointNotificationCallback(d->watch); d->watch->Release(); d->watch = nullptr; }
+    d->volume.Reset(); d->render.Reset(); d->client.Reset(); d->en.Reset();
     if (d->mf) MFShutdown();
     if (d->com) CoUninitialize();
 }

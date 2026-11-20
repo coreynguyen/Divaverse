@@ -4,6 +4,10 @@
 #include <cstdio>
 #include <share.h>
 #include <algorithm>
+#include <exception>
+#include <cstdlib>
+#include <csignal>
+#include <dbghelp.h>
 
 static FILE* g_log = nullptr;
 static std::mutex g_logMx;
@@ -85,4 +89,79 @@ bool ReadFileUtf8(const std::wstring& p, std::string& out) {
 double NowSeconds() {
     static LARGE_INTEGER f = [] { LARGE_INTEGER x; QueryPerformanceFrequency(&x); return x; }();
     LARGE_INTEGER c; QueryPerformanceCounter(&c); return (double)c.QuadPart / (double)f.QuadPart;
+}
+
+bool WriteFileAtomic(const std::wstring& path, const void* data, size_t n) {
+    std::wstring tmp = path + L".tmp";
+    HANDLE f = CreateFileW(tmp.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (f == INVALID_HANDLE_VALUE) { Log("write %s: create failed (%lu)", WToUtf8(tmp).c_str(), GetLastError()); return false; }
+    DWORD w = 0; BOOL ok = WriteFile(f, data, (DWORD)n, &w, nullptr) && w == (DWORD)n;
+    ok = ok && FlushFileBuffers(f);
+    CloseHandle(f);
+    if (!ok) { DeleteFileW(tmp.c_str()); Log("write %s: failed (%lu)", WToUtf8(tmp).c_str(), GetLastError()); return false; }
+    if (!MoveFileExW(tmp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+        Log("write %s: rename failed (%lu)", WToUtf8(path).c_str(), GetLastError()); DeleteFileW(tmp.c_str()); return false; }
+    return true;
+}
+
+uint64_t FileWriteTime(const std::wstring& p) {
+    WIN32_FILE_ATTRIBUTE_DATA a; if (!GetFileAttributesExW(p.c_str(), GetFileExInfoStandard, &a)) return 0;
+    return ((uint64_t)a.ftLastWriteTime.dwHighDateTime << 32) | a.ftLastWriteTime.dwLowDateTime;
+}
+
+// ------------------------------------------------------------------------------------ crash capture
+namespace {
+wchar_t g_crashDir[MAX_PATH];
+typedef BOOL(WINAPI* MiniDumpWriteDump_t)(HANDLE, DWORD, HANDLE, MINIDUMP_TYPE, PMINIDUMP_EXCEPTION_INFORMATION, PMINIDUMP_USER_STREAM_INFORMATION, PMINIDUMP_CALLBACK_INFORMATION);
+LONG WINAPI CrashFilter(EXCEPTION_POINTERS* ep) {
+    static volatile LONG once = 0;
+    if (InterlockedExchange(&once, 1)) return EXCEPTION_EXECUTE_HANDLER;     // a second thread crashing meanwhile: the first report wins
+    SYSTEMTIME st; GetLocalTime(&st);
+    wchar_t base[MAX_PATH]; swprintf(base, MAX_PATH, L"%ls\\crash-%04d%02d%02d-%02d%02d%02d", g_crashDir, st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+    CreateDirectoryW(g_crashDir, nullptr);
+    // text first: it needs nothing but the CRT and survives if dbghelp itself fails
+    DWORD code = ep && ep->ExceptionRecord ? ep->ExceptionRecord->ExceptionCode : 0; void* addr = ep && ep->ExceptionRecord ? ep->ExceptionRecord->ExceptionAddress : nullptr;
+    HMODULE mod = nullptr; wchar_t modName[MAX_PATH] = L"?";
+    if (addr && GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCWSTR)addr, &mod)) GetModuleFileNameW(mod, modName, MAX_PATH);
+    char txt[4096]; int n = snprintf(txt, sizeof(txt), "Divaverse %s crashed\r\nexception 0x%08lX at %p (%ls + 0x%llX)\r\nthread %lu\r\n\r\n--- log tail ---\r\n",
+        DV_VERSION, (unsigned long)code, addr, modName, (unsigned long long)((uintptr_t)addr - (uintptr_t)mod), GetCurrentThreadId());
+    if (g_logMx.try_lock()) {                                                   // the crash may be inside Log(): never wait for it
+        size_t from = g_tail.size() > 60 ? g_tail.size() - 60 : 0;
+        for (size_t i = from; i < g_tail.size() && n < (int)sizeof(txt) - 300; ++i) n += snprintf(txt + n, sizeof(txt) - n, "%s", g_tail[i].c_str());
+        if (g_log) fflush(g_log);
+        g_logMx.unlock();
+    }
+    std::wstring tp = std::wstring(base) + L".txt";
+    HANDLE ft = CreateFileW(tp.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, 0, nullptr);
+    if (ft != INVALID_HANDLE_VALUE) { DWORD w; WriteFile(ft, txt, (DWORD)n, &w, nullptr); CloseHandle(ft); }
+    if (HMODULE dbg = LoadLibraryW(L"dbghelp.dll")) {
+        if (auto write = (MiniDumpWriteDump_t)GetProcAddress(dbg, "MiniDumpWriteDump")) {
+            std::wstring dp = std::wstring(base) + L".dmp";
+            HANDLE fd = CreateFileW(dp.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, 0, nullptr);
+            if (fd != INVALID_HANDLE_VALUE) {
+                MINIDUMP_EXCEPTION_INFORMATION mi{ GetCurrentThreadId(), ep, FALSE };
+                write(GetCurrentProcess(), GetCurrentProcessId(), fd, (MINIDUMP_TYPE)(MiniDumpWithIndirectlyReferencedMemory | MiniDumpScanMemory | MiniDumpWithThreadInfo), ep ? &mi : nullptr, nullptr, nullptr);
+                CloseHandle(fd);
+            }
+        }
+    }
+    return EXCEPTION_EXECUTE_HANDLER;                                           // end the process quietly; the next start reports it
+}
+void RaiseFatal() { RaiseException(0xE0D1AF01, EXCEPTION_NONCONTINUABLE, 0, nullptr); }
+}
+std::wstring CrashDir() { return LogDir() + L"\\crash"; }
+void CrashInstall() {
+    std::wstring d = CrashDir(); wcsncpy(g_crashDir, d.c_str(), MAX_PATH - 1);
+    SetUnhandledExceptionFilter(CrashFilter);
+    std::set_terminate([] { RaiseFatal(); std::abort(); });
+    _set_purecall_handler([] { RaiseFatal(); });
+    _set_invalid_parameter_handler([](const wchar_t*, const wchar_t*, const wchar_t*, unsigned, uintptr_t) { RaiseFatal(); });
+    signal(SIGABRT, [](int) { RaiseFatal(); });
+}
+uint64_t NewestCrashTime(std::wstring* dmp) {
+    WIN32_FIND_DATAW fd; HANDLE h = FindFirstFileW((CrashDir() + L"\\crash-*.txt").c_str(), &fd); uint64_t best = 0;
+    if (h == INVALID_HANDLE_VALUE) return 0;
+    do { uint64_t t = ((uint64_t)fd.ftLastWriteTime.dwHighDateTime << 32) | fd.ftLastWriteTime.dwLowDateTime;
+         if (t > best) { best = t; if (dmp) { *dmp = CrashDir() + L"\\" + fd.cFileName; dmp->resize(dmp->size() - 4); } } } while (FindNextFileW(h, &fd));
+    FindClose(h); return best;
 }

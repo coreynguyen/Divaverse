@@ -65,7 +65,7 @@ public:
     bool    Failed() const { return failed_.load(); }
     bool    FullRange() const;
     // Decode-path facts for the tray tooltip / selftest JSON
-    struct DecodeInfo { bool d3dManaged; int gpuFrames, cpuFrames, streamChanges; uint64_t loops, fed, emitted, tsAnomalies; const char* stage; };
+    struct DecodeInfo { bool d3dManaged; int gpuFrames, cpuFrames, streamChanges; uint64_t loops, fed, emitted, tsAnomalies; const char* stage; float feedMs; };
     DecodeInfo Info() const;
     void SetLowLatency(bool on) { lowLatency_ = on; }      // call before Open
 

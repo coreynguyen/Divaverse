@@ -9,6 +9,7 @@
 #include <windowsx.h>
 #include <cmath>
 #include <algorithm>
+#include "MfDecoder.h"
 
 App* g_app = nullptr;
 
@@ -18,7 +19,7 @@ constexpr wchar_t kClass[] = L"Divaverse.Overlay";
 constexpr wchar_t kMutex[] = L"Local\\Divaverse.SingleInstance";
 constexpr ULONG_PTR kCopyOpen = 0x44564F50; // 'DVOP'
 constexpr wchar_t kRunKey[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\Run";
-enum HotKey { HK_EDIT = 1, HK_PAUSE, HK_HIDE, HK_NEXT, HK_QUIT, HK_PREV, HK_MPLAY, HK_MNEXT, HK_MPREV, HK_MSTOP };
+enum HotKey { HK_MPLAY = 10, HK_MNEXT, HK_MPREV, HK_MSTOP };      // media keys; rebindable shortcuts use kHotBase + HotAction
 constexpr double kStagePxPerMetre = 420.0;      // at stage scale 1.0 and 96 dpi a 1.75 m performer is 735 px tall
 constexpr double kAssumedCanvasMetres = 1.75;   // uncalibrated clips: the canvas is taken to span this height
 
@@ -48,11 +49,36 @@ void WriteFileAll(const std::wstring& p, const void* d, size_t n) {
 }
 
 // ------------------------------------------------------------------------------------ settings
+// player.ini stays an INI file (readable, hand-editable), but it is written in one piece as UTF-16 with a BOM through
+// WriteFileAtomic: paths in any script survive, and a crash mid-save can no longer leave half a file.
+const wchar_t* HotActionName(int a) {
+    static const wchar_t* n[HA_COUNT] = { L"Hide everything now / bring her back", L"Play / pause the performer", L"Next clip", L"Previous clip",
+                                          L"Move and resize", L"Performance overlay", L"Exit" };
+    return a >= 0 && a < HA_COUNT ? n[a] : L"";
+}
+uint32_t HotkeyDefault(int a) {
+    static const UINT vk[HA_COUNT] = { 'H', 'P', 'N', 'B', 'E', 'D', 'Q' };
+    return a >= 0 && a < HA_COUNT ? ((uint32_t)(MOD_CONTROL | MOD_ALT) << 16) | vk[a] : 0;
+}
+std::wstring HotkeyText(uint32_t k) {
+    if (!k) return L"Not set";
+    UINT mods = k >> 16, vk = k & 0xFFFF; std::wstring t;
+    if (mods & MOD_CONTROL) t += L"Ctrl + ";
+    if (mods & MOD_ALT) t += L"Alt + ";
+    if (mods & MOD_SHIFT) t += L"Shift + ";
+    if (mods & MOD_WIN) t += L"Win + ";
+    UINT sc = MapVirtualKeyW(vk, MAPVK_VK_TO_VSC); wchar_t nm[64] = {};
+    bool ext = vk == VK_INSERT || vk == VK_DELETE || vk == VK_HOME || vk == VK_END || vk == VK_PRIOR || vk == VK_NEXT || (vk >= VK_LEFT && vk <= VK_DOWN);
+    if (sc && GetKeyNameTextW((LONG)((sc << 16) | (ext ? 1 << 24 : 0)), nm, 64) > 0) t += nm;
+    else { wchar_t b[16]; swprintf(b, 16, (vk >= 'A' && vk <= 'Z') || (vk >= '0' && vk <= '9') ? L"%c" : L"key 0x%02X", vk); t += b; }
+    return t;
+}
+
 void Settings::Load() {
-    std::wstring f = AppDataDir() + L"\\player.ini"; wchar_t b[2048];
+    std::wstring f = AppDataDir() + L"\\player.ini"; std::vector<wchar_t> buf(32768); wchar_t* b = buf.data();
     auto gi = [&](const wchar_t* k, int d) { return (int)GetPrivateProfileIntW(L"Player", k, d, f.c_str()); };
-    auto gf = [&](const wchar_t* k, float d) { GetPrivateProfileStringW(L"Player", k, L"", b, 2048, f.c_str()); return b[0] ? (float)_wtof(b) : d; };
-    auto gs = [&](const wchar_t* k) { GetPrivateProfileStringW(L"Player", k, L"", b, 2048, f.c_str()); return std::wstring(b); };
+    auto gs = [&](const wchar_t* k) { GetPrivateProfileStringW(L"Player", k, L"", b, (DWORD)buf.size(), f.c_str()); return std::wstring(b); };
+    auto gf = [&](const wchar_t* k, float d) { std::wstring v = gs(k); return v.empty() ? d : (float)_wtof(v.c_str()); };
     x = gi(L"anchor_x", INT_MIN); bottom = gi(L"ground_y", INT_MIN);
     scale = std::clamp(gf(L"stage_scale", scale), 0.25f, 3.0f);
     wrLook = gi(L"wetrash_look", 1); gravity = gi(L"gravity", 1) != 0; seasonal = gi(L"seasonal", 1) != 0; editor = gi(L"editor", 0) != 0;
@@ -64,32 +90,56 @@ void Settings::Load() {
     music = gi(L"music", 0) != 0; musicShuffle = gi(L"music_shuffle", 0) != 0; musicNormalize = gi(L"music_normalize", 1) != 0; musicVolume = std::clamp(gf(L"music_volume", musicVolume), 0.f, 1.f);
     musicMode = std::clamp(gi(L"music_mode", 0), 0, 1); station = std::max(0, gi(L"station", 0));
     decodeMode = gi(L"gpu_decode", 0) ? 1 : 0; hwBad = gi(L"hw_bad", 0) != 0; dcompBad = gi(L"dcomp_bad", 0) != 0;
+    perfHud = gi(L"perf_overlay", 0) != 0; crashSeen = _wcstoui64(gs(L"crash_seen").c_str(), nullptr, 10);
+    schedFrom = std::clamp(gi(L"schedule_from", -1), -1, 23); schedTo = std::clamp(gi(L"schedule_to", -1), -1, 23); idleShow = std::clamp(gi(L"idle_show_minutes", 0), 0, 240);
+    for (int a = 0; a < HA_COUNT; ++a) { wchar_t k[32]; swprintf(k, 32, L"hotkey%d", a); std::wstring v = gs(k); hotkeys[a] = v.empty() ? HotkeyDefault(a) : (uint32_t)wcstoul(v.c_str(), nullptr, 16); }
     last = gs(L"last");
-    folders.clear();
-    auto list = [&](const wchar_t* name, std::vector<std::wstring>& out) {
+    auto list = [&](const wchar_t* name, std::vector<std::wstring>& out, int cap) {
         out.clear(); wchar_t k[32]; swprintf(k, 32, L"%lss", name);
-        for (int i = 0, n = gi(k, 0); i < n && i < 64; ++i) { swprintf(k, 32, L"%ls%d", name, i); std::wstring v = gs(k); if (!v.empty()) out.push_back(v); }
+        for (int i = 0, n = gi(k, 0); i < n && i < cap; ++i) { swprintf(k, 32, L"%ls%d", name, i); std::wstring v = gs(k); if (!v.empty()) out.push_back(v); }
     };
-    list(L"folder", folders); list(L"fav", favs); list(L"recent", recent); list(L"queue", queue); list(L"queue", queue);
+    list(L"folder", folders, 64); list(L"fav", favs, 256); list(L"recent", recent, 64); list(L"queue", queue, 512);
+    displays.clear();
+    DWORD n = GetPrivateProfileSectionW(L"Displays", b, (DWORD)buf.size(), f.c_str());
+    for (const wchar_t* p = b; p < b + n && *p; p += wcslen(p) + 1) { const wchar_t* eq = wcschr(p, L'='); if (eq) displays.emplace_back(std::wstring(p, eq), std::wstring(eq + 1)); }
 }
-void Settings::Save() const {
+
+void Settings::Save() {
     if (noSave) return;
-    std::wstring f = AppDataDir() + L"\\player.ini"; wchar_t b[64];
-    auto pi = [&](const wchar_t* k, int v) { swprintf(b, 64, L"%d", v); WritePrivateProfileStringW(L"Player", k, b, f.c_str()); };
-    auto pf = [&](const wchar_t* k, float v) { swprintf(b, 64, L"%.4f", v); WritePrivateProfileStringW(L"Player", k, b, f.c_str()); };
+    RememberPlacement();
+    std::wstring o = L"\xFEFF; Divaverse settings (written whole; edit while Divaverse is closed)\r\n[Player]\r\nversion=2\r\n"; wchar_t b[64];
+    auto ps = [&](const wchar_t* k, const std::wstring& v) { o += k; o += L'='; o += v; o += L"\r\n"; };
+    auto pi = [&](const wchar_t* k, long long v) { swprintf(b, 64, L"%lld", v); ps(k, b); };
+    auto pf = [&](const wchar_t* k, float v) { swprintf(b, 64, L"%.4f", v); ps(k, b); };
     pi(L"anchor_x", x); pi(L"ground_y", bottom); pf(L"stage_scale", scale); pf(L"opacity", opacity);
     pi(L"wetrash_look", wrLook); pi(L"gravity", gravity); pi(L"seasonal", seasonal); pi(L"editor", editor);
     pi(L"click_through", clickThrough); pi(L"lock", lock); pi(L"loop_mode", loopMode); pi(L"card_mode", cardMode); pf(L"zoom", zoom);
-    WritePrivateProfileStringW(L"Player", L"last_stall", lastStall.c_str(), f.c_str());
+    ps(L"last_stall", lastStall);
     pi(L"mirror", mirror); pi(L"topmost", topmost); pi(L"shadow", shadow); pi(L"autohide", autoHide); pi(L"theme", theme); pi(L"fx", fx); pi(L"sfx", sfx); pf(L"sfx_volume", sfxVol);
     pi(L"music", music); pi(L"music_shuffle", musicShuffle); pi(L"music_normalize", musicNormalize); pf(L"music_volume", musicVolume); pi(L"music_mode", musicMode); pi(L"station", station);
     pi(L"gpu_decode", decodeMode == 1); pi(L"hw_bad", hwBad); pi(L"dcomp_bad", dcompBad);
-    WritePrivateProfileStringW(L"Player", L"last", last.c_str(), f.c_str());
+    pi(L"perf_overlay", perfHud); swprintf(b, 64, L"%llu", (unsigned long long)crashSeen); ps(L"crash_seen", b);
+    pi(L"schedule_from", schedFrom); pi(L"schedule_to", schedTo); pi(L"idle_show_minutes", idleShow);
+    for (int a = 0; a < HA_COUNT; ++a) { wchar_t k[32], v[16]; swprintf(k, 32, L"hotkey%d", a); swprintf(v, 16, L"%X", hotkeys[a]); ps(k, v); }
+    ps(L"last", last);
     auto list = [&](const wchar_t* name, const std::vector<std::wstring>& v) {
-        wchar_t k[32]; swprintf(k, 32, L"%lss", name); pi(k, (int)v.size());
-        for (size_t i = 0; i < v.size(); ++i) { swprintf(k, 32, L"%ls%d", name, (int)i); WritePrivateProfileStringW(L"Player", k, v[i].c_str(), f.c_str()); }
+        wchar_t k[32]; swprintf(k, 32, L"%lss", name); pi(k, (long long)v.size());
+        for (size_t i = 0; i < v.size(); ++i) { swprintf(k, 32, L"%ls%d", name, (int)i); ps(k, v[i]); }
     };
-    list(L"folder", folders); list(L"fav", favs); list(L"recent", recent);
+    list(L"folder", folders); list(L"fav", favs); list(L"recent", recent); list(L"queue", queue);
+    o += L"\r\n[Displays]\r\n"; for (auto& d : displays) ps(d.first.c_str(), d.second);
+    WriteFileAtomic(AppDataDir() + L"\\player.ini", o.data(), o.size() * sizeof(wchar_t));
+}
+void Settings::RememberPlacement() {
+    if (layout.empty() || x == INT_MIN) return;
+    wchar_t v[64]; swprintf(v, 64, L"%d,%d,%.4f", x, bottom, scale);
+    for (auto& d : displays) if (d.first == layout) { d.second = v; return; }
+    displays.emplace_back(layout, v);
+    if (displays.size() > 16) displays.erase(displays.begin());
+}
+bool Settings::RecallPlacement(const std::wstring& key) {
+    for (auto& d : displays) if (d.first == key) { int xx, bb; float sc; if (swscanf(d.second.c_str(), L"%d,%d,%f", &xx, &bb, &sc) == 3) { x = xx; bottom = bb; scale = std::clamp(sc, 0.25f, 3.0f); return true; } }
+    return false;
 }
 
 bool App::Autostart() {
@@ -177,7 +227,7 @@ bool App::OpenPath(const std::wstring& pathIn) {
     show = std::move(s);
     if (!OpenClip(idx)) return false;
     bool known; { std::lock_guard<std::mutex> g(lib.Mutex()); known = lib.FindClip(stagePath_) >= 0; }
-    if (!known && selftest_.empty()) RescanLibrary();    // set.last now points here, so its folder joins the library
+    if (!known && selftest_.empty() && !lib.Scanning()) RescanLibrary();    // set.last now points here, so its folder joins the library
     return true;
 }
 
@@ -229,7 +279,7 @@ void App::Unstage() {
 
 void App::UpdateOverlayVisibility() {
     if (!hwnd_) return;
-    bool vis = src_ && !hidden_ && !panic_ && !autoHidden_;
+    bool vis = src_ && !hidden_ && !panic_ && !autoHidden_ && !schedHidden_;
     ShowWindow(hwnd_, vis ? SW_SHOWNOACTIVATE : SW_HIDE);
 }
 
@@ -336,17 +386,17 @@ void App::SetEdit(bool on) {
     dirty_ = true; TrayUpdate(); UiInvalidate();
 }
 void App::UpdateSuspend() {
-    bool s = paused_ || hidden_ || panic_ || autoHidden_ || !src_;
+    bool s = paused_ || hidden_ || panic_ || autoHidden_ || !src_ || sleeping_ || displayOff_ || locked_ || schedHidden_;   // nothing to look at: no decoding
     if (s != suspended_) {
         double now = NowSeconds();
         if (s) suspendMedia_ = now - clockOrigin_; else { clockOrigin_ = now - suspendMedia_; lastProgress_ = now; }
         suspended_ = s; dirty_ = true;
     }
-    music.SetSuspended(musicPaused_ || gameOpen_ || panic_ || autoHidden_ || (paused_ && src_));   // music keeps playing while she is merely hidden
+    music.SetSuspended(musicPaused_ || gameOpen_ || panic_ || autoHidden_ || sleeping_ || (paused_ && src_));   // music keeps playing while she is merely hidden
 }
 void App::SetPaused(bool on) { paused_ = on; UpdateSuspend(); TrayUpdate(); UiInvalidate(); }
 void App::SetHidden(bool on) {
-    hidden_ = on; if (!on) panic_ = false;
+    hidden_ = on; idleShown_ = false; if (!on) panic_ = false;
     if (on && edit_) SetEdit(false);
     UpdateOverlayVisibility(); UpdateSuspend(); TrayUpdate(); UiInvalidate();
 }
@@ -407,7 +457,11 @@ std::vector<std::wstring> App::LibraryFolders() const {
     }
     return v;
 }
-void App::RescanLibrary() { lib.Rescan(LibraryFolders(), UiWindow(), WM_APP_POSTER); UiInvalidate(); }
+void App::RescanLibrary() {
+    auto folders = LibraryFolders();
+    lib.Rescan(folders, UiWindow(), WM_APP_POSTER); UiInvalidate();
+    if (!SelfTesting()) lib.Watch(folders, hwnd_, WM_APP_LIBCHANGED);       // clips copied in later appear without a restart
+}
 void App::AddLibraryFolder(const std::wstring& dir) {
     for (auto& f : set.folders) if (!_wcsicmp(f.c_str(), dir.c_str())) return;
     set.folders.push_back(dir); set.Save(); RescanLibrary();
@@ -434,9 +488,22 @@ void App::PollPointer() {
     SetWindowLongPtrW(hwnd_, GWL_EXSTYLE, solid ? ex & ~WS_EX_TRANSPARENT : ex | WS_EX_TRANSPARENT);
 }
 
+constexpr int kHotBase = 100;                                     // WM_HOTKEY id = kHotBase + HotAction
 void App::RegisterHotkeys() {
-    struct { int id; UINT vk; } hk[] = { { HK_EDIT, 'E' }, { HK_PAUSE, 'P' }, { HK_HIDE, 'H' }, { HK_NEXT, 'N' }, { HK_QUIT, 'Q' }, { HK_PREV, 'B' } };
-    for (auto& k : hk) if (!RegisterHotKey(hwnd_, k.id, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, k.vk)) Log("hotkey Ctrl+Alt+%c unavailable", (char)k.vk);
+    for (int a = 0; a < HA_COUNT; ++a) {
+        uint32_t k = set.hotkeys[a]; if (!k) continue;
+        if (!RegisterHotKey(hwnd_, kHotBase + a, (k >> 16) | MOD_NOREPEAT, k & 0xFFFF)) Log("hotkey %s (%s) unavailable: held by another program", WToUtf8(HotkeyText(k)).c_str(), WToUtf8(HotActionName(a)).c_str());
+    }
+}
+bool App::SetHotkey(int a, uint32_t k) {
+    if (a < 0 || a >= HA_COUNT) return false;
+    for (int o = 0; o < HA_COUNT; ++o) if (o != a && k && set.hotkeys[o] == k) return false;          // already one of ours
+    UnregisterHotKey(hwnd_, kHotBase + a);
+    if (k && !RegisterHotKey(hwnd_, kHotBase + a, (k >> 16) | MOD_NOREPEAT, k & 0xFFFF)) {
+        if (set.hotkeys[a]) RegisterHotKey(hwnd_, kHotBase + a, (set.hotkeys[a] >> 16) | MOD_NOREPEAT, set.hotkeys[a] & 0xFFFF);
+        return false;
+    }
+    set.hotkeys[a] = k; set.Save(); return true;
 }
 // Keyboard media keys drive the music while it is switched on; while it is off they are left to other players.
 void App::UpdateMediaKeys() {
@@ -459,6 +526,97 @@ void App::PollFullscreen(double now) {
         UpdateOverlayVisibility(); UpdateSuspend();
     }
 }
+
+// Time window and idle behaviour (Settings -> Schedule), polled once a second.
+void App::PollSchedule(double now) {
+    SYSTEMTIME st; GetLocalTime(&st); int h = st.wHour, a = set.schedFrom, b = set.schedTo;
+    bool out = a >= 0 && b >= 0 && a != b && !(a < b ? (h >= a && h < b) : (h >= a || h < b));
+    if (out != schedHidden_) { schedHidden_ = out; Log("schedule: %s (window %02d:00-%02d:00)", out ? "outside the window -> off stage" : "inside the window -> on stage", a, b); UpdateOverlayVisibility(); UpdateSuspend(); TrayUpdate(); }
+    if (set.idleShow > 0 && src_ && !panic_) {
+        LASTINPUTINFO li{ sizeof(li) }; GetLastInputInfo(&li); double idle = (GetTickCount() - li.dwTime) / 1000.0;
+        if (!idleShown_ && hidden_ && idle >= set.idleShow * 60.0) { hidden_ = false; idleShown_ = true; Log("idle %.0f s -> performer out", idle); UpdateOverlayVisibility(); UpdateSuspend(); }
+        else if (idleShown_ && idle < 1.5) { hidden_ = true; idleShown_ = false; Log("input -> performer back off stage"); UpdateOverlayVisibility(); UpdateSuspend(); }
+    }
+}
+
+// The monitor arrangement as a short key: the same set of rectangles gives the same key, so a laptop that docks and
+// undocks finds its performer where it was left on each setup.
+std::wstring App::LayoutKey() const {
+    std::vector<RECT> v;
+    EnumDisplayMonitors(nullptr, nullptr, [](HMONITOR, HDC, LPRECT r, LPARAM p) -> BOOL { ((std::vector<RECT>*)p)->push_back(*r); return TRUE; }, (LPARAM)&v);
+    std::sort(v.begin(), v.end(), [](const RECT& x, const RECT& y) { return x.left != y.left ? x.left < y.left : x.top < y.top; });
+    uint32_t hsh = 2166136261u; auto mix = [&](long q) { for (int i = 0; i < 4; ++i) { hsh ^= (uint8_t)(q >> (8 * i)); hsh *= 16777619u; } };
+    for (auto& r : v) { mix(r.left); mix(r.top); mix(r.right); mix(r.bottom); }
+    wchar_t b[40]; swprintf(b, 40, L"layout-%u-%08X", (unsigned)v.size(), hsh); return b;
+}
+void App::OnDisplayChange() {
+    std::wstring key = LayoutKey(); dirty_ = true;
+    if (key == set.layout) { EnsureVisible(); return; }
+    set.RememberPlacement();                                         // where she was on the arrangement we are leaving
+    set.layout = key;
+    bool known = set.RecallPlacement(key);
+    Log("display arrangement %s -> %s placement", WToUtf8(key).c_str(), known ? "remembered" : "new");
+    if (src_) ApplyGeometry(known); else EnsureVisible();
+    set.Save();
+}
+
+App::PerfStats App::Perf() const {
+    PerfStats p; p.fps = fpsEst_; p.presentMs = presentMs_; p.gpu = clipHw_; p.frame = shown_;
+    if (src_) { VideoSource::DecodeInfo di = src_->Info(); p.decodeMs = di.feedMs; p.dropped = src_->Dropped(); p.unpaired = src_->Unpaired(); p.queued = (int)(di.fed - di.emitted); p.stage = di.stage; }
+    return p;
+}
+void App::SetPerfHud(bool on) { set.perfHud = on; set.Save(); PerfHudShow(on); UiInvalidate(); }
+
+std::wstring App::ExportDiagnostics() {
+    SYSTEMTIME st; GetLocalTime(&st); wchar_t nm[64]; swprintf(nm, 64, L"\\diagnostics-%04d%02d%02d-%02d%02d%02d", st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+    std::wstring d = LogDir() + nm; if (!CreateDirectoryW(d.c_str(), nullptr)) return L"";
+    std::wstring rep = DiagText(); PerfStats p = Perf(); wchar_t b[256];
+    swprintf(b, 256, L"Performance: %.1f fps | decode %.2f ms | present %.2f ms | in decoder %d\r\n", p.fps, p.decodeMs, p.presentMs, p.queued); rep += b;
+    std::string u = WToUtf8(rep); WriteFileAtomic(d + L"\\report.txt", u);
+    { std::lock_guard<std::mutex> g(lib.Mutex()); std::string pr; for (auto& q : lib.Problems()) pr += WToUtf8(q.path) + ": " + q.what + "\r\n"; if (!pr.empty()) WriteFileAtomic(d + L"\\library-problems.txt", pr); }
+    CopyFileW((LogDir() + L"\\player.log").c_str(), (d + L"\\player.log").c_str(), FALSE);
+    CopyFileW((LogDir() + L"\\player.prev.log").c_str(), (d + L"\\player.prev.log").c_str(), FALSE);
+    CopyFileW((AppDataDir() + L"\\player.ini").c_str(), (d + L"\\player.ini").c_str(), FALSE);
+    std::wstring crash; if (NewestCrashTime(&crash)) { CopyFileW((crash + L".txt").c_str(), (d + L"\\crash.txt").c_str(), FALSE); CopyFileW((crash + L".dmp").c_str(), (d + L"\\crash.dmp").c_str(), FALSE); }
+    Log("diagnostics exported to %s", WToUtf8(d).c_str());
+    return d;
+}
+void App::StartGpuTrace() {
+    if (set.decodeMode != 1) SetDecodeMode(1);
+    g_decTrace = 6000; traceUntil_ = NowSeconds() + 20;
+    Log("gpu trace: started (decoder calls are logged for 20 s)");
+    if (src_) OpenClip(clipIdx);                                     // restart decode so the trace includes decoder start-up
+    Notify(L"Recording a GPU decode trace", L"Keep the performer on stage for 20 seconds. The diagnostics folder opens when it is done.");
+}
+
+std::vector<std::wstring> App::ClipPlaylists() const {
+    std::vector<std::wstring> v; WIN32_FIND_DATAW fd; HANDLE h = FindFirstFileW((AppDataDir() + L"\\ClipPlaylists\\*.m3u8").c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE) return v;
+    do { std::wstring n = fd.cFileName; v.push_back(n.substr(0, n.size() - 5)); } while (FindNextFileW(h, &fd));
+    FindClose(h); std::sort(v.begin(), v.end()); return v;
+}
+bool App::SaveClipPlaylist(const std::wstring& nameIn) {
+    std::wstring name; for (wchar_t c : nameIn) if (!wcschr(L"\\/:*?\"<>|", c)) name += c;
+    if (name.empty()) return false;
+    std::vector<std::wstring> v; if (src_) v.push_back(show.clips[clipIdx].path); for (auto& q : set.queue) v.push_back(q);
+    if (v.empty()) return false;
+    std::wstring dir = AppDataDir() + L"\\ClipPlaylists"; CreateDirectoryW(dir.c_str(), nullptr);
+    std::string m = "#EXTM3U\r\n"; for (auto& p : v) m += WToUtf8(p) + "\r\n";
+    return WriteFileAtomic(dir + L"\\" + name + L".m3u8", m);
+}
+bool App::LoadClipPlaylist(const std::wstring& name, bool play) {
+    std::string txt; if (!ReadFileUtf8(AppDataDir() + L"\\ClipPlaylists\\" + name + L".m3u8", txt)) return false;
+    std::vector<std::wstring> v; size_t p = 0;
+    while (p < txt.size()) { size_t e = txt.find('\n', p); std::string l = txt.substr(p, e == std::string::npos ? std::string::npos : e - p); p = e == std::string::npos ? txt.size() : e + 1;
+        while (!l.empty() && (l.back() == '\r' || l.back() == ' ')) l.pop_back();
+        if (l.empty() || l[0] == '#') continue;
+        std::wstring w = Utf8ToW(l); if (FileExists(w)) v.push_back(w); }
+    if (v.empty()) return false;
+    set.queue = v; set.Save();
+    if (play) PlayQueued();
+    UiInvalidate(); return true;
+}
+void App::DeleteClipPlaylist(const std::wstring& name) { DeleteFileW((AppDataDir() + L"\\ClipPlaylists\\" + name + L".m3u8").c_str()); UiInvalidate(); }
 
 // Playback watchdog. If frames stop arriving while the clock is running, record where the decoder is and walk the
 // fallback chain: GPU decode -> CPU decode -> layered presentation. What it learns is remembered for this machine.
@@ -493,7 +651,12 @@ void App::Tick() {
     if (!selftest_.empty() && (!src_ || now - selftestStart_ > selftestSecs_ + 20.0)) {   // nothing to test / stuck
         Log(src_ ? "selftest timeout" : "selftest: no playable clip"); SelftestFinish(); return;
     }
-    if (now - lastFsPoll_ > 1.0) { lastFsPoll_ = now; PollFullscreen(now); }
+    if (now - lastFsPoll_ > 1.0) { lastFsPoll_ = now; PollFullscreen(now); if (selftest_.empty()) PollSchedule(now); }
+    if (set.perfHud) PerfHudTick(now);
+    if (traceUntil_ > 0 && now > traceUntil_) {
+        traceUntil_ = 0; g_decTrace = 0; Log("gpu trace: finished");
+        std::wstring d = ExportDiagnostics(); if (!d.empty()) ShellExecuteW(nullptr, L"open", d.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+    }
     if (now - lastMusicPoll_ > 1.0) { lastMusicPoll_ = now; music.Poll(); UpdateMediaKeys(); user.Flush(); }
     if (now - lastPtrPoll_ > 0.03) { lastPtrPoll_ = now; PollPointer(); }
     if (qaDrop_ == 1 && shown_ > 30) {                   // QA: lift her 300 px and let go
@@ -576,7 +739,10 @@ void App::Tick() {
     cb.shadow = set.shadow ? 1.f : 0.f; cb.editMode = editAnim_;
     cb.opacity = set.opacity * fadeIn_; cb.paused = paused_ ? 1.f : 0.f;
 
-    if (!r_.Render(slot, src_->Dual(), cb)) {
+    double rt0 = NowSeconds(); bool rendered = r_.Render(slot, src_->Dual(), cb); double rt1 = NowSeconds();
+    presentMs_ += ((rt1 - rt0) * 1000 - presentMs_) * 0.1;
+    if (newFrame) { if (lastPresentT_ > 0 && rt1 - lastPresentT_ < 1) fpsEst_ += (1.0 / std::max(1e-3, rt1 - lastPresentT_) - fpsEst_) * 0.1; lastPresentT_ = rt1; }
+    if (!rendered) {
         Log("device lost -> rebuilding renderer"); events_.push_back("graphics device lost -> rebuilt");
         VideoSource::Retire(src_); r_.Shutdown();
         std::wstring err;
@@ -601,7 +767,7 @@ std::wstring App::DiagText() {
     std::wstring s; wchar_t b[640];                  // built wide: no dependence on the compiler's narrow execution charset
     OSVERSIONINFOW vi{ sizeof(vi) }; using PFN = LONG(WINAPI*)(OSVERSIONINFOW*);
     if (auto rtl = (PFN)(void*)GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "RtlGetVersion")) rtl(&vi);
-    swprintf(b, 640, L"Divaverse 0.6 | Windows %lu.%lu.%lu\r\n", vi.dwMajorVersion, vi.dwMinorVersion, vi.dwBuildNumber); s += b;
+    swprintf(b, 640, L"Divaverse " DV_VERSION_W L" | Windows %lu.%lu.%lu\r\n", vi.dwMajorVersion, vi.dwMinorVersion, vi.dwBuildNumber); s += b;
     swprintf(b, 640, L"Graphics: %ls | %ls\r\n", Utf8ToW(r_.AdapterName()).c_str(), mode_ == PresentMode::DComp ? L"DirectComposition" : L"layered window"); s += b;
     if (r_.PresentFailures()) { swprintf(b, 640, L"Layered presentation errors: %u\r\n", r_.PresentFailures()); s += b; }
     swprintf(b, 640, L"Video decoding: %ls%ls%ls\r\n", set.decodeMode == 1 ? L"GPU (opt-in)" : L"CPU", set.hwBad ? L" (GPU decoding stalled on this PC)" : L"", set.dcompBad ? L" (DirectComposition failed here)" : L""); s += b;
@@ -812,16 +978,17 @@ LRESULT App::WndProc(UINT m, WPARAM w, LPARAM l) {
         return 0; } break;
     case WM_HOTKEY:
         switch (w) {
-        case HK_EDIT: SetEdit(!edit_); break;
-        case HK_PAUSE: if (src_) SetPaused(!paused_); break;
-        case HK_HIDE: if (Hidden()) SetHidden(false); else Panic(true); break;     // works with or without a performer on stage
-        case HK_PREV: OnCommand(ID_PREV); break;
+        case kHotBase + HA_EDIT: SetEdit(!edit_); break;
+        case kHotBase + HA_PAUSE: if (src_) SetPaused(!paused_); break;
+        case kHotBase + HA_HIDE: if (Hidden()) SetHidden(false); else Panic(true); break;     // works with or without a performer on stage
+        case kHotBase + HA_PREV: OnCommand(ID_PREV); break;
+        case kHotBase + HA_PERF: SetPerfHud(!set.perfHud); break;
         case HK_MPLAY: OnCommand(ID_MUSIC_PAUSE); break;
         case HK_MNEXT: OnCommand(ID_MUSIC_NEXT); break;
         case HK_MPREV: OnCommand(ID_MUSIC_PREV); break;
         case HK_MSTOP: if (music.Enabled()) SetMusicPaused(true); break;
-        case HK_NEXT: OnCommand(ID_NEXT); break;
-        case HK_QUIT: Quit(); break;
+        case kHotBase + HA_NEXT: OnCommand(ID_NEXT); break;
+        case kHotBase + HA_QUIT: Quit(); break;
         }
         return 0;
     case WM_APP_TRAY:
@@ -842,11 +1009,25 @@ LRESULT App::WndProc(UINT m, WPARAM w, LPARAM l) {
         }
         break; }
     case WM_DPICHANGED: ApplyGeometry(); return 0;
-    case WM_DISPLAYCHANGE: EnsureVisible(); dirty_ = true; return 0;
+    case WM_DISPLAYCHANGE: OnDisplayChange(); return 0;
+    case WM_APP_LIBCHANGED: RescanLibrary(); return 0;
+    case WM_POWERBROADCAST:
+        if (w == PBT_APMSUSPEND) { sleeping_ = true; Log("system suspending -> playback paused"); set.Save(); user.Flush(true); UpdateSuspend(); }
+        else if (w == PBT_APMRESUMEAUTOMATIC || w == PBT_APMRESUMESUSPEND) { if (sleeping_) Log("system resumed"); sleeping_ = false; UpdateSuspend(); }
+        else if (w == PBT_POWERSETTINGCHANGE && l) {
+            auto* ps = (POWERBROADCAST_SETTING*)l; static const GUID kDisplayState = { 0x6fe69556, 0x704a, 0x47a0, { 0x8f, 0x24, 0xc2, 0x8d, 0x93, 0x6f, 0xda, 0x47 } };
+            if (IsEqualGUID(ps->PowerSetting, kDisplayState) && ps->DataLength >= sizeof(DWORD)) { bool off = *(const DWORD*)ps->Data == 0; if (off != displayOff_) { displayOff_ = off; Log("display %s", off ? "off -> decoding paused" : "on"); UpdateSuspend(); } }
+        }
+        return TRUE;
+    case 0x02B1:                                                     // WM_WTSSESSION_CHANGE: locked screen = nobody can see her
+        if (w == 7 || w == 8) { locked_ = w == 7; Log("session %s", locked_ ? "locked -> decoding paused" : "unlocked"); UpdateSuspend(); }
+        return 0;
     case WM_ENDSESSION: set.Save(); return 0;
     case WM_DESTROY:
         if (recreating_) return 0;
-        set.Save(); TrayRemove(); PostQuitMessage(0); return 0;
+        set.Save(); TrayRemove(); PerfHudShow(false);
+        if (powerNote_) { UnregisterPowerSettingNotification(powerNote_); powerNote_ = nullptr; }
+        PostQuitMessage(0); return 0;
     }
     return DefWindowProcW(hwnd_, m, w, l);
 }
@@ -864,6 +1045,20 @@ int App::Run(HINSTANCE hi, int argc, wchar_t** argv) {
         // ---- internal QA hooks below: not documented, not part of the product surface
         else if (a == L"--layered") cliLayered_ = true;
         else if (a == L"--sw") cliSw_ = true;
+        else if (a == L"--qa-settings" && i + 1 < argc) {               // QA: settings survive a save / load round trip (unicode paths, hotkeys, displays)
+            std::wstring out = argv[++i]; Settings s1; s1.Load();
+            s1.folders = { L"C:\\Divas \u65E5\u672C \u00E9t\u00E9", L"D:\\Clips" }; s1.queue = { L"C:\\q\\\u30AF\u30EA\u30C3\u30D7.mkv" }; s1.hotkeys[HA_PERF] = ((uint32_t)(MOD_CONTROL | MOD_SHIFT) << 16) | VK_F9;
+            s1.x = 777; s1.bottom = 555; s1.scale = 1.25f; s1.layout = L"layout-2-ABCDEF01"; s1.schedFrom = 20; s1.schedTo = 2; s1.idleShow = 5; s1.crashSeen = 133999999999999999ull;
+            s1.Save(); Settings s2; s2.Load();
+            bool ok = s2.folders == s1.folders && s2.queue == s1.queue && s2.hotkeys[HA_PERF] == s1.hotkeys[HA_PERF] && s2.hotkeys[HA_HIDE] == HotkeyDefault(HA_HIDE) && s2.x == 777 && s2.schedFrom == 20 && s2.schedTo == 2
+                && s2.idleShow == 5 && s2.crashSeen == s1.crashSeen && s2.RecallPlacement(L"layout-2-ABCDEF01") && s2.x == 777 && s2.bottom == 555 && std::fabs(s2.scale - 1.25f) < 1e-3f;
+            std::string r = std::string("settings round trip: ") + (ok ? "PASS" : "FAIL") + "\nfolder0=" + WToUtf8(s2.folders.empty() ? L"" : s2.folders[0]) + "\nqueue0=" + WToUtf8(s2.queue.empty() ? L"" : s2.queue[0]) +
+                "\nperf hotkey=" + WToUtf8(HotkeyText(s2.hotkeys[HA_PERF])) + "\nhide hotkey=" + WToUtf8(HotkeyText(s2.hotkeys[HA_HIDE])) + "\nlayout key now=" + WToUtf8(LayoutKey()) + "\n";
+            WriteFileAtomic(out, r); return ok ? 0 : 3;
+        }
+        else if (a == L"--qa-library" && i + 2 < argc) { qaLibDir_ = argv[++i]; qaLibSecs_ = _wtof(argv[++i]); }     // QA: scan one folder, watch it, quit after N s
+        else if (a == L"--perfhud") qaHud_ = true;
+        else if (a == L"--crashtest") { Log("qa: deliberate access violation"); volatile int* p = nullptr; *p = 1; }     // QA: proves the crash report path
         else if (a == L"--hw") qaHw_ = true;
         else if (a == L"--lowlatency") lowLatency_ = true;
         else if (a == L"--edit") startEdit = true;
@@ -917,7 +1112,8 @@ int App::Run(HINSTANCE hi, int argc, wchar_t** argv) {
         return 0;
     }
 
-    set.Load(); set.noSave = test; if (!test) user.Load();
+    set.Load(); set.noSave = test || !qaLibDir_.empty(); if (!test) user.Load();
+    if (!qaLibDir_.empty()) { set.folders = { qaLibDir_ }; set.last.clear(); startHidden_ = true; }
     if (test) { set.loopMode = 0; set.clickThrough = false; set.decodeMode = qaHw_ ? 1 : 0; set.hwBad = false; set.x = set.bottom = INT_MIN; set.scale = 1.f; set.mirror = false; }
     { wchar_t qs[32]; if (GetEnvironmentVariableW(L"DIVAVERSE_QA_SEEK", qs, 32)) qaSeek_ = _wtoi(qs); if (GetEnvironmentVariableW(L"DIVAVERSE_QA_DROP", qs, 32)) qaDrop_ = 1; }
     if (cliScale > 0) set.scale = std::clamp(cliScale, 0.25f, 3.0f);
@@ -932,6 +1128,15 @@ int App::Run(HINSTANCE hi, int argc, wchar_t** argv) {
     wmTaskbarCreated_ = RegisterWindowMessageW(L"TaskbarCreated");
 
     if (!CreateOverlay() || !InitRenderer()) return 2;
+    set.layout = LayoutKey(); if (!test && set.RecallPlacement(set.layout)) Log("placement for %s restored", WToUtf8(set.layout).c_str());
+    if (!test) {
+        static const GUID kDisplayState = { 0x6fe69556, 0x704a, 0x47a0, { 0x8f, 0x24, 0xc2, 0x8d, 0x93, 0x6f, 0xda, 0x47 } };
+        powerNote_ = RegisterPowerSettingNotification(hwnd_, &kDisplayState, DEVICE_NOTIFY_WINDOW_HANDLE);
+        if (HMODULE wts = LoadLibraryW(L"wtsapi32.dll")) if (auto reg = (BOOL(WINAPI*)(HWND, DWORD))GetProcAddress(wts, "WTSRegisterSessionNotification")) reg(hwnd_, 0 /* this session */);
+        uint64_t ct = NewestCrashTime();
+        if (ct > set.crashSeen) { set.crashSeen = ct; set.Save();
+            Notify(L"Divaverse closed unexpectedly last time", L"A crash report was saved. Settings > Diagnostics > Export diagnostics collects it with the logs."); }
+    }
     { wchar_t qm[MAX_PATH]; if (GetEnvironmentVariableW(L"DIVAVERSE_QA_MUSIC", qm, MAX_PATH)) { music.Load();      // QA: recursive import + playlist import
             int n = music.AddFolder(qm); Sleep(1500); music.Poll(); int pl = music.ImportPlaylist(JoinPath(qm, L"mix.m3u"));
             Log("qa music: added %d, tracks %zu, albums %zu, playlist %d with %zu entries, first '%s' / '%s' / '%s'", n, music.Tracks().size(), music.Albums().size(), pl,
@@ -953,6 +1158,8 @@ int App::Run(HINSTANCE hi, int argc, wchar_t** argv) {
     }
     if (!path.empty()) OpenPath(path);
     if (startEdit) SetEdit(true);
+    if ((set.perfHud && !test) || qaHud_) { set.perfHud = true; PerfHudShow(true); }
+    double qaLibEnd = qaLibDir_.empty() ? 0 : NowSeconds() + qaLibSecs_;
     UpdateSuspend();
 
     timer_ = CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
@@ -980,11 +1187,16 @@ int App::Run(HINSTANCE hi, int argc, wchar_t** argv) {
             if (NowSeconds() - pumpStart > 0.006) break;
         }
         Tick();
+        if (qaLibEnd > 0 && NowSeconds() > qaLibEnd) {
+            lib.WaitScan(30); std::lock_guard<std::mutex> g(lib.Mutex());
+            Log("qa library: %zu divas, %zu clips, %zu problems, last scan %.0f ms", lib.Divas().size(), lib.Clips().size(), lib.Problems().size(), lib.LastScanSeconds() * 1000);
+            msg.wParam = 0; goto done;
+        }
         if (!qaWheel_.empty() && src_ && shown_ > 24) {
             if (!WheelOpen()) { RECT rc; GetWindowRect(hwnd_, &rc); PerformerMenu({ (rc.left + rc.right) / 2, (rc.top + rc.bottom) / 2 }); }
             else { bool ok = WheelScreenshot(qaWheel_); msg.wParam = ok ? 0 : 3; goto done; }
         }
-        if (!uishot.empty() && NowSeconds() > uishotAt) { bool ok = uishotPage >= 40 ? WetRashShot(uishot, uishotPage - 40) : UiScreenshot(uishot, uishotPage); msg.wParam = ok ? 0 : 3; goto done; }
+        if (!uishot.empty() && NowSeconds() > uishotAt && lib.WaitScan(30)) { bool ok = uishotPage >= 40 ? WetRashShot(uishot, uishotPage - 40) : UiScreenshot(uishot, uishotPage); msg.wParam = ok ? 0 : 3; goto done; }
     }
 done:
     FlyoutClose(); WheelClose(); WetRashClose(); SfxShutdown();
@@ -1000,8 +1212,8 @@ done:
 int WINAPI wWinMain(HINSTANCE hi, HINSTANCE, PWSTR, int) {
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);   // also in manifest
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
-    LogInit();
-    Log("Divaverse 0.12.0 starting");
+    LogInit(); CrashInstall();
+    Log("Divaverse " DV_VERSION " starting");
     int argc = 0; wchar_t** argv = CommandLineToArgvW(GetCommandLineW(), &argc);
     App app; g_app = &app;
     int rc = app.Run(hi, argc, argv);

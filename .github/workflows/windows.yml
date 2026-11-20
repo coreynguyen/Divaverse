@@ -1,0 +1,80 @@
+# Windows build and smoke test. This is the only place the MSVC build, DirectComposition and the Windows Media
+# Foundation H.264 decoder are exercised automatically; the developer loop is mingw + Wine (Tools/build).
+name: windows
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: microsoft/setup-msbuild@v2
+
+      - name: Build (Release x64, MSVC v143)
+        shell: pwsh
+        run: |
+          msbuild Divaverse.sln /m /p:Configuration=Release /p:Platform=x64 /nologo /v:minimal /fl "/flp:logfile=build.log;verbosity=normal"
+          $code = $LASTEXITCODE
+          # surface compiler errors and warnings as annotations (readable without downloading logs)
+          Select-String -Path build.log -Pattern ': (error|warning) [A-Z]+[0-9]+' | Select-Object -First 60 | ForEach-Object {
+            $l = $_.Line.Trim(); if ($l -match ': error ') { Write-Output "::error::$l" } else { Write-Output "::warning::$l" } }
+          exit $code
+
+      - name: Locate the exe and check its imports
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem -Recurse -Filter Divaverse.exe | Where-Object { $_.FullName -match 'Release' } | Select-Object -First 1
+          if (-not $exe) { Write-Output "::error::Divaverse.exe not produced"; exit 1 }
+          "EXE=$($exe.FullName)" | Out-File -Append $env:GITHUB_ENV
+          Write-Output "::notice::built $($exe.FullName) ($($exe.Length) bytes)"
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          $dumpbin = Get-ChildItem -Recurse "$vs\VC\Tools\MSVC" -Filter dumpbin.exe | Where-Object { $_.FullName -match 'Hostx64\\x64' } | Select-Object -First 1
+          $imports = & $dumpbin.FullName /dependents $exe.FullName | Where-Object { $_ -match '\.dll' } | ForEach-Object { $_.Trim() }
+          $allow = '^(KERNEL32|USER32|GDI32|SHELL32|ole32|OLEAUT32|ADVAPI32|comdlg32|COMCTL32|d3d11|dxgi|dcomp|D3DCOMPILER_47|MFPlat|MFReadWrite|WINMM|dwmapi|UxTheme|SHLWAPI|d2d1|DWrite|WindowsCodecs|api-ms-win-[a-z0-9-]+)\.dll$'
+          $bad = $imports | Where-Object { $_ -notmatch $allow }
+          Write-Output "::notice::imports: $($imports -join ', ')"
+          if ($bad) { Write-Output "::error::non-system imports: $($bad -join ', ')"; exit 1 }
+
+      - name: Media Foundation available?
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $f = Get-WindowsFeature Server-Media-Foundation -ErrorAction SilentlyContinue
+          Write-Output "::notice::Server-Media-Foundation: $($f.InstallState)"
+          if ($f -and $f.InstallState -ne 'Installed') { Install-WindowsFeature Server-Media-Foundation | Out-String | Write-Output }
+
+      - name: Smoke tests (WARP, CPU decode)
+        shell: pwsh
+        run: |
+          $D = "$pwd\TestAssets\Divas\Luna\luna_sway.mkv"; $P = "$pwd\TestAssets\Divas\Luna\luna_sway_packed.mkv"
+          $fail = 0
+          function T($name, [string[]]$a) {
+            $out = "$pwd\st_$name.bmp"
+            $p = Start-Process -FilePath $env:EXE -ArgumentList (@('--selftest', "`"$out`"", '--selftest-seconds', '6') + $a) -PassThru -Wait -NoNewWindow
+            $j = if (Test-Path "$out.json") { (Get-Content "$out.json" -Raw) -replace "`r?`n", ' ' } else { 'no report' }
+            if ($p.ExitCode -eq 0) { Write-Output "::notice::PASS $name $j" } else { Write-Output "::error::FAIL $name (rc=$($p.ExitCode)) $j"; $script:fail = 1 }
+          }
+          T 'dual_dcomp'   @('--sw', '--expect', 'layout=dual', '--expect', 'unpaired=0', "`"$D`"")
+          T 'dual_layered' @('--sw', '--layered', '--expect', 'layout=dual', '--expect', 'loops=1', "`"$D`"")
+          T 'packed'       @('--sw', '--layered', '--expect', 'layout=packed', "`"$P`"")
+          $env:DIVAVERSE_QA_SEEK = '150'
+          T 'seek_env_150' @('--sw', '--layered', '--expect', 'seek=150', '--expect', 'unpaired=0', "`"$D`"")
+          Remove-Item Env:DIVAVERSE_QA_SEEK
+          $log = "$env:LOCALAPPDATA\Divaverse\player.log"
+          if (Test-Path $log) { Get-Content $log -Tail 40 | ForEach-Object { Write-Output "log: $_" } }
+          exit $fail
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: divaverse-windows
+          path: |
+            **/Release/Divaverse.exe
+            st_*.bmp
+            st_*.json
+            build.log

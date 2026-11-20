@@ -36,12 +36,12 @@ public:
 
 private:
     void ThreadMain();
-    bool Init(std::wstring& err);
+    bool Init(std::wstring& err); bool OpenDevice(int keepRate, int keepCh, std::wstring& err); bool Reopen(const char* why);
     struct Impl; Impl* d = nullptr;
     std::unique_ptr<AudioSource> src_; bool nullSink_ = false;
     std::thread th_;
     HANDLE ready_ = nullptr; bool initOk_ = false; std::wstring initErr_;
-    std::atomic<bool> run_{false}, eof_{false}, failed_{false}, paused_{false}, pauseDirty_{false}, volDirty_{false};
+    std::atomic<bool> run_{false}, eof_{false}, failed_{false}, devChanged_{false}, paused_{false}, pauseDirty_{false}, volDirty_{false};
     std::atomic<bool> normalize_{false}; float gain_ = 0, loud_ = 0.14f, normGain_ = 1;
     std::atomic<float> vol_{1.f}, level_{0.f}; std::atomic<uint64_t> frames_{0};
     int rate_ = 0, ch_ = 0;

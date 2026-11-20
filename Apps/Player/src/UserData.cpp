@@ -29,8 +29,7 @@ void UserData::Save() {
     for (auto& kv : tags) if (!kv.second.empty()) { out += "T\t" + WToUtf8(kv.first); for (auto& t : kv.second) out += "\t" + WToUtf8(t); out += "\r\n"; }
     for (auto& k : seen) out += "S\t" + WToUtf8(k) + "\r\n";
     for (auto& kv : weight) if (std::fabs(kv.second - 1.f) > 0.01f) { snprintf(b, sizeof(b), "%.3f", kv.second); out += "W\t" + WToUtf8(kv.first) + "\t" + b + "\r\n"; }
-    HANDLE f = CreateFileW(File().c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, 0, nullptr);
-    if (f != INVALID_HANDLE_VALUE) { DWORD w; WriteFile(f, out.data(), (DWORD)out.size(), &w, nullptr); CloseHandle(f); }
+    WriteFileAtomic(File(), out);
     dirty = false; lastFlush = NowSeconds();
 }
 void UserData::Flush(bool force) { if (dirty && (force || NowSeconds() - lastFlush > 60)) Save(); }
