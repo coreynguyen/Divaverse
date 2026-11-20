@@ -41,8 +41,8 @@ double NowSeconds();
 #ifndef DV_PLUGINS
 #define DV_PLUGINS 1
 #endif
-#define DV_VERSION_W L"0.15.0"
-#define DV_VERSION   "0.15.0"
+#define DV_VERSION_W L"0.15.1"
+#define DV_VERSION   "0.15.1"
 
 // Writes the whole file to <path>.tmp, flushes it, then swaps it in with one rename. A crash or power cut leaves
 // either the old file or the new one, never a truncated mix.

@@ -499,10 +499,17 @@ float PageDetail(const RectF& a, int d) {
     float y = a.top + 52, cw = std::min(250.f, RW(a) * 0.30f), chh = std::min(cw * 2.6f, std::max(420.f, C().H() - 110));      // banner standard is 1:3, shown cropped to at most 1:2.6
     RectF art = RF(a.left, y, cw, chh);
     C().Glow((art.left + art.right) / 2, art.bottom - 40, cw * 0.9f, chh * 0.35f, Hex(kPink, 0.22f));
-    C().Shadow(art, 20, 16, P().dark ? 0.6f : 0.22f);
-    if (ID2D1Bitmap* bn = Banner(d)) { Backdrop(art, 20, d + 3); C().PushClip(art, 20); Contain(bn, RF(art.left + 6, art.top + 10, cw - 12, chh - 14)); C().PopClip(); }
-    else { C().FillRR(art, 20, P().card); if (ID2D1Bitmap* cv = Cover(d)) C().BitmapCover(cv, art, 20, 1.f, 0.1f, 1.f); else DivaArt(d, art, 20, 0, false); }
-    C().GradStrokeRR(art, 20, Hex(kPink), Hex(kCyan), 2.f, (float)U.t * 30.f); if (Fx() > 0) U.animating = true;
+    ID2D1Bitmap* fig = Banner(d); if (!fig && !Cover(d)) { auto& dc = g_app->lib.Divas()[d].clips; if (!dc.empty()) fig = Thumb(dc[0]); }      // no banner and no cover: a frame of her first clip, also a cut-out
+    if (ID2D1Bitmap* bn = fig) {                        // cut-out figure: she stands on the page itself, on a mirror floor (no card, no frame)
+        D2D1_SIZE_F sz = bn->GetSize(); RectF body = RF(art.left, art.top, cw, chh * 0.90f); float k = std::min(RW(body) / sz.width, RH(body) / sz.height), w = sz.width * k, h = sz.height * k, cx = (art.left + art.right) / 2, fy = body.bottom;
+        C().Glow(cx, fy - h * 0.02f, w * 0.62f, h * 0.035f, Hex(0x000000, P().dark ? 0.55f : 0.30f));                              // contact shadow under her feet
+        const int bands = 10; float rh = chh * 0.10f, lift = h * 0.012f;                                                           // reflection: her picture upside down below the floor line, fading out in bands
+        for (int i = 0; i < bands; ++i) { RectF cl = RF(art.left - 20, fy + rh * i / bands, cw + 40, rh / bands + 0.5f); C().PushClip(cl);
+            C().SetTransform(D2D1::Matrix3x2F::Scale(1.f, -1.f, D2D1::Point2F(cx, fy - lift))); C().Bitmap(bn, RF(cx - w / 2, fy - h, w, h), 0.30f * (1 - (i + 0.5f) / bands) * (1 - (i + 0.5f) / bands)); C().ResetTransform(); C().PopClip(); }
+        C().Bitmap(bn, RF(cx - w / 2, fy - h, w, h));
+    }
+    else { C().Shadow(art, 20, 16, P().dark ? 0.6f : 0.22f); C().FillRR(art, 20, P().card); if (ID2D1Bitmap* cv = Cover(d)) C().BitmapCover(cv, art, 20, 1.f, 0.1f, 1.f); else DivaArt(d, art, 20, 0, false);
+        C().GradStrokeRR(art, 20, Hex(kPink), Hex(kCyan), 2.f, (float)U.t * 30.f); if (Fx() > 0) U.animating = true; }
     int stage = StageDiva(); bool on = stage == d;
     if (on) Pill(RF(art.left + 12, art.top + 12, 82, 24), L"ON STAGE", true);
 
@@ -860,7 +867,7 @@ float PageMusic(const RectF& a) {
     Button(457, RF(a.left + 434, y, 190, 36), L"Add stream (paste URL)", I_ADD, B_GHOST, [] {       // internet radio: the address is taken from the clipboard
         std::wstring url; if (OpenClipboard(U.h)) { if (HANDLE hd = GetClipboardData(CF_UNICODETEXT)) { if (auto* p = (const wchar_t*)GlobalLock(hd)) { url = p; GlobalUnlock(hd); } } CloseClipboard(); }
         if (g_app->music.AddStream(url)) { UiToast(L"Stream added to My files"); UiInvalidate(); } else UiToast(L"Copy the stream address (http:// or https://) first, then press this"); });
-    C().Text(Fmt(L"%d songs, %d albums", (int)tr.size(), (int)M.Albums().size()), RF(a.left + 636, y, 200, 36), 12.5f, P().faint);
+    if (U.musicTab != 2 && RW(a) > 636 + 150 + (U.musicTab == 3 ? 300 : 0)) C().Text(Fmt(L"%d songs, %d albums", (int)tr.size(), (int)M.Albums().size()), RF(a.left + 636, y, 200, 36), 12.5f, P().faint);      // Songs shows its own hint here
     y += 52;
     if (tr.empty()) { C().Text(L"Nothing here yet. Add a folder: every sub-folder is searched, and albums are rebuilt from the files' own tags.", RF(a.left, y, RW(a), 40), 13, P().dim, 0, false, false, true); return y + 60; }
     if (U.musicTab == 1 && !U.albumOpen.empty()) {      // one album, opened like a folder
@@ -947,7 +954,7 @@ float PageMusic(const RectF& a) {
     // ---- songs
     SearchBox(RF(a.right - 250, y - 52, 250, 36));
     auto& pl = M.Playlists(); bool canAdd = U.plSel >= 0 && U.plSel < (int)pl.size();
-    C().Text(canAdd ? L"+ adds to " + pl[U.plSel].name : L"Pick a playlist in Playlists to enable +", RF(a.left + 296 + 250, y - 52, RW(a) - 820, 36), 11.5f, P().faint);
+    C().Text(canAdd ? L"+ adds to " + pl[U.plSel].name : L"Pick a playlist in Playlists to enable +", RF(a.left + 636, y - 52, RW(a) - 636 - 262, 36), 11.5f, RW(a) - 636 - 262 > 110 ? P().faint : Alpha(P().faint, 0));
     std::wstring q = Lower(U.search); std::vector<int> rows;
     for (int i = 0; i < (int)tr.size(); ++i) if (Fuzzy(tr[i].name + L" " + tr[i].artist + L" " + tr[i].album, q)) rows.push_back(i);
     if (rows.empty()) { C().Text(L"Nothing matches.", RF(a.left, y + 10, RW(a), 30), 13, P().dim, 1); return y + 60; }

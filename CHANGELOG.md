@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.15.1
+- Diva page: the figure stands directly on the page with a contact shadow and a mirror-floor reflection; no card,
+  backdrop or frame behind her (banner, or a frame of her first clip when there is no banner or cover).
+- Music import row: the song count and the playlist hint no longer print on top of each other.
+
 ## 0.15.0 (albums, content plugins)
 - Music: the options (Crossfade, Even loudness, Shuffle) move to their own row when the window is too narrow to hold
   them beside the tabs; they no longer overlap.
