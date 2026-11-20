@@ -62,6 +62,10 @@ public:
     void Poll();
     bool Playing() const { return out_ != nullptr && !suspended_; }
     float Level() const { return out_ ? out_->Level() : 0.f; }
+    float Band(int i) const { return out_ ? out_->Band(i) : 0.f; }
+    void SetCrossfade(float seconds) { xfade_ = seconds; } float Crossfade() const { return xfade_; }      // own files only; 0 = off
+    bool AddStream(const std::wstring& url);                 // http(s) audio stream (internet radio); played through the OS decoders
+    static bool IsStream(const std::wstring& p) { return p.rfind(L"http://", 0) == 0 || p.rfind(L"https://", 0) == 0; }
     std::wstring NowPlaying() const;
     std::wstring LastError() const { return lastErr_; }
     static bool IsAudioFile(const std::wstring& path);
@@ -78,7 +82,7 @@ private:
     void Touch() { dirty_ = true; }
     std::vector<MusicTrack> tracks_; std::vector<MusicAlbum> albums_; int albumsGen_ = -1; std::vector<MusicPlaylist> lists_;
     std::vector<int> recent_;
-    std::unique_ptr<AudioOut> out_;
+    std::unique_ptr<AudioOut> out_, old_; double oldUntil_ = 0; float xfade_ = 0;       // old_: the previous song while it fades out
     bool enabled_ = false, suspended_ = false, shuffle_ = false, normalize_ = true, dirty_ = false; float volume_ = 0.6f;
     int mode_ = 0, station_ = 0, current_ = -1, scopeKind_ = 0, scopeIndex_ = 0, gen_ = 0; std::wstring lastErr_; double lastFlush_ = 0;
     struct Tag { std::wstring path, title, artist, album; };

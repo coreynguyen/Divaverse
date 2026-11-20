@@ -15,6 +15,7 @@ struct AudioSource {
     // Fill n interleaved frames. Return frames written; fewer than n = end of stream.
     virtual uint32_t Render(float* dst, uint32_t n) = 0;
     virtual void Shutdown() {}
+    virtual double Duration() { return 0; }      // seconds, 0 = unknown / endless (asked after Prepare, on the output thread)
 };
 
 class AudioOut {
@@ -31,6 +32,11 @@ public:
     bool Failed() const { return failed_.load(); }
     uint64_t Frames() const { return frames_.load(); }
     float Level() const { return level_.load(); }          // recent output peak 0..1 (for the visualiser)
+    static constexpr int kBands = 16;
+    float Band(int i) const { return i >= 0 && i < kBands ? bands_[i].load() : 0.f; }      // spectrum 60 Hz .. 14 kHz, log spaced, 0..1 with decay
+    double Duration() const { return dur_.load(); }
+    void Fade(float to, float seconds) { fadeTime_ = seconds > 0.01f ? seconds : 0.01f; fadeGoal_ = to; }      // multiplies the volume; ramps on the output thread
+    void PresetFade(float v) { fadeCur_ = v; fadeGoal_ = v; }                                                   // before Open: start silent for a fade-in
     int SampleRate() const { return rate_; } int Channels() const { return ch_; }
     AudioSource* Source() { return src_.get(); }
 
@@ -44,6 +50,7 @@ private:
     std::atomic<bool> run_{false}, eof_{false}, failed_{false}, devChanged_{false}, paused_{false}, pauseDirty_{false}, volDirty_{false};
     std::atomic<bool> normalize_{false}; float gain_ = 0, loud_ = 0.14f, normGain_ = 1;
     std::atomic<float> vol_{1.f}, level_{0.f}; std::atomic<uint64_t> frames_{0};
+    std::atomic<float> bands_[kBands] = {}; std::atomic<double> dur_{0}; std::atomic<float> fadeGoal_{1.f}, fadeTime_{1.f}; float fadeCur_ = 1.f;
     int rate_ = 0, ch_ = 0;
 };
 

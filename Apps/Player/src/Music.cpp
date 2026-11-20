@@ -115,6 +115,7 @@ void Music::Load() {
             t.weight = std::clamp((float)atof(f[1].c_str()), 0.15f, 2.5f); t.plays = atoi(f[2].c_str()); t.skips = atoi(f[3].c_str()); t.path = Utf8ToW(f[4]);
             if (f.size() > 5) t.name = Utf8ToW(f[5]); if (f.size() > 6) t.artist = Utf8ToW(f[6]); if (f.size() > 7) t.album = Utf8ToW(f[7]);
         } else { std::string p = f[0]; if (p[0] == '-') { t.enabled = false; p.erase(0, 1); } t.path = Utf8ToW(p); }      // 0.3 / 0.4 list: one path per line
+        if (IsStream(t.path)) { if (FindTrack(t.path) < 0) { t.tagged = true; tracks_.push_back(t); } continue; }
         if (!FileExists(t.path) || !IsAudioFile(t.path) || FindTrack(t.path) >= 0) continue;
         if (t.name.empty()) t.name = NameOf(t.path); if (t.album.empty()) t.album = FolderName(t.path);
         if (!t.tagged) { std::lock_guard<std::mutex> g(tagMx_); tagTodo_.push_back(t.path); }
@@ -229,7 +230,16 @@ int Music::ImportPlaylist(const std::wstring& file) {
     return (int)lists_.size() - 1;
 }
 
+bool Music::AddStream(const std::wstring& urlIn) {
+    std::wstring url = urlIn; while (!url.empty() && iswspace(url.back())) url.pop_back(); while (!url.empty() && iswspace(url.front())) url.erase(url.begin());
+    if (!IsStream(url) || url.size() > 1024 || url.find_first_of(L" \t\r\n\"<>") != std::wstring::npos || FindTrack(url) >= 0) return false;
+    MusicTrack t; t.path = url; t.tagged = true; t.artist = L"Internet radio";
+    size_t h = url.find(L"//") + 2, e = url.find_first_of(L"/:?", h); t.name = url.substr(h, e == std::wstring::npos ? e : e - h); t.album = L"Streams";
+    tracks_.push_back(t); ++gen_; Touch(); return true;
+}
 bool Music::Start() {
+    bool fade = xfade_ > 0.05f && mode_ == 1 && out_ && !out_->Done() && !out_->Failed() && !suspended_;
+    if (fade) { old_ = std::move(out_); old_->Fade(0, xfade_); oldUntil_ = NowSeconds() + xfade_ + 0.3; } else old_.reset();
     out_.reset(); lastErr_.clear();
     if (!enabled_) return false;
     std::unique_ptr<AudioSource> src;
@@ -240,6 +250,7 @@ bool Music::Start() {
     if (mode_ == 0) src = MakeSynthSource(station_);
     auto o = std::make_unique<AudioOut>(); std::wstring err;
     o->SetNormalize(normalize_ && mode_ == 1);                  // the generated stations are already level
+    if (fade) { o->PresetFade(0); o->Fade(1, xfade_); }
     if (!o->Open(std::move(src), volume_, false, err)) { lastErr_ = err; Log("music: %s", WToUtf8(err).c_str()); return false; }
     Log("music: %s, %d Hz %d ch", WToUtf8(NowPlaying()).c_str(), o->SampleRate(), o->Channels());
     out_ = std::move(o);
@@ -284,9 +295,9 @@ void Music::Prev() {
     else { size_t k = 0; for (size_t j = 0; j < ok.size(); ++j) if (ok[j] == current_) k = j; current_ = ok[(k + ok.size() - 1) % ok.size()]; }
     if (enabled_) Start();
 }
-void Music::SetEnabled(bool on) { enabled_ = on; if (!on) out_.reset(); else if (!out_) Start(); }
-void Music::SetSuspended(bool on) { suspended_ = on; if (out_) out_->Pause(on); }
-void Music::SetVolume(float v) { volume_ = std::clamp(v, 0.f, 1.f); if (out_) out_->SetVolume(volume_); }
+void Music::SetEnabled(bool on) { enabled_ = on; if (!on) { out_.reset(); old_.reset(); } else if (!out_) Start(); }
+void Music::SetSuspended(bool on) { suspended_ = on; if (out_) out_->Pause(on); if (on) old_.reset(); }
+void Music::SetVolume(float v) { volume_ = std::clamp(v, 0.f, 1.f); if (out_) out_->SetVolume(volume_); if (old_) old_->SetVolume(volume_); }
 void Music::SetNormalize(bool on) { normalize_ = on; if (out_) out_->SetNormalize(on && mode_ == 1); }
 void Music::Poll() {
     {   // tags read by the worker are applied here, on the UI thread
@@ -296,7 +307,9 @@ void Music::Poll() {
         if (!done.empty()) { ++gen_; Touch(); }
     }
     Flush();
+    if (old_ && NowSeconds() > oldUntil_) old_.reset();
     if (!enabled_ || suspended_ || !out_) return;
+    if (mode_ == 1 && xfade_ > 0.05f && !old_ && out_->Duration() > xfade_ * 3 && out_->Seconds() > out_->Duration() - xfade_ - 0.5) { Next(false); return; }      // start the next song under the tail of this one
     if (out_->Failed()) { Start(); return; }                               // device changed / removed: reopen on the new default
     if (out_->Done() && mode_ == 1) Next(false);
 }

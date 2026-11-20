@@ -36,8 +36,8 @@ using CtxLock = std::recursive_mutex;
 // Monotonic seconds (QPC)
 double NowSeconds();
 
-#define DV_VERSION_W L"0.13.0"
-#define DV_VERSION   "0.13.0"
+#define DV_VERSION_W L"0.14.0"
+#define DV_VERSION   "0.14.0"
 
 // Writes the whole file to <path>.tmp, flushes it, then swaps it in with one rename. A crash or power cut leaves
 // either the old file or the new one, never a truncated mix.

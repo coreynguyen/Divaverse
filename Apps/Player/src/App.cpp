@@ -90,6 +90,7 @@ void Settings::Load() {
     music = gi(L"music", 0) != 0; musicShuffle = gi(L"music_shuffle", 0) != 0; musicNormalize = gi(L"music_normalize", 1) != 0; musicVolume = std::clamp(gf(L"music_volume", musicVolume), 0.f, 1.f);
     musicMode = std::clamp(gi(L"music_mode", 0), 0, 1); station = std::max(0, gi(L"station", 0));
     decodeMode = gi(L"gpu_decode", 0) ? 1 : 0; hwBad = gi(L"hw_bad", 0) != 0; dcompBad = gi(L"dcomp_bad", 0) != 0;
+    musicXfade = std::clamp(gf(L"music_crossfade", 0.f), 0.f, 12.f);
     perfHud = gi(L"perf_overlay", 0) != 0; crashSeen = _wcstoui64(gs(L"crash_seen").c_str(), nullptr, 10);
     schedFrom = std::clamp(gi(L"schedule_from", -1), -1, 23); schedTo = std::clamp(gi(L"schedule_to", -1), -1, 23); idleShow = std::clamp(gi(L"idle_show_minutes", 0), 0, 240);
     for (int a = 0; a < HA_COUNT; ++a) { wchar_t k[32]; swprintf(k, 32, L"hotkey%d", a); std::wstring v = gs(k); hotkeys[a] = v.empty() ? HotkeyDefault(a) : (uint32_t)wcstoul(v.c_str(), nullptr, 16); }
@@ -98,7 +99,7 @@ void Settings::Load() {
         out.clear(); wchar_t k[32]; swprintf(k, 32, L"%lss", name);
         for (int i = 0, n = gi(k, 0); i < n && i < cap; ++i) { swprintf(k, 32, L"%ls%d", name, i); std::wstring v = gs(k); if (!v.empty()) out.push_back(v); }
     };
-    list(L"folder", folders, 64); list(L"fav", favs, 256); list(L"recent", recent, 64); list(L"queue", queue, 512);
+    list(L"folder", folders, 64); list(L"fav", favs, 256); list(L"recent", recent, 64); list(L"queue", queue, 512); list(L"collection", collections, 24);
     displays.clear();
     DWORD n = GetPrivateProfileSectionW(L"Displays", b, (DWORD)buf.size(), f.c_str());
     for (const wchar_t* p = b; p < b + n && *p; p += wcslen(p) + 1) { const wchar_t* eq = wcschr(p, L'='); if (eq) displays.emplace_back(std::wstring(p, eq), std::wstring(eq + 1)); }
@@ -118,6 +119,7 @@ void Settings::Save() {
     pi(L"mirror", mirror); pi(L"topmost", topmost); pi(L"shadow", shadow); pi(L"autohide", autoHide); pi(L"theme", theme); pi(L"fx", fx); pi(L"sfx", sfx); pf(L"sfx_volume", sfxVol);
     pi(L"music", music); pi(L"music_shuffle", musicShuffle); pi(L"music_normalize", musicNormalize); pf(L"music_volume", musicVolume); pi(L"music_mode", musicMode); pi(L"station", station);
     pi(L"gpu_decode", decodeMode == 1); pi(L"hw_bad", hwBad); pi(L"dcomp_bad", dcompBad);
+    pf(L"music_crossfade", musicXfade);
     pi(L"perf_overlay", perfHud); swprintf(b, 64, L"%llu", (unsigned long long)crashSeen); ps(L"crash_seen", b);
     pi(L"schedule_from", schedFrom); pi(L"schedule_to", schedTo); pi(L"idle_show_minutes", idleShow);
     for (int a = 0; a < HA_COUNT; ++a) { wchar_t k[32], v[16]; swprintf(k, 32, L"hotkey%d", a); swprintf(v, 16, L"%X", hotkeys[a]); ps(k, v); }
@@ -126,7 +128,7 @@ void Settings::Save() {
         wchar_t k[32]; swprintf(k, 32, L"%lss", name); pi(k, (long long)v.size());
         for (size_t i = 0; i < v.size(); ++i) { swprintf(k, 32, L"%ls%d", name, (int)i); ps(k, v[i]); }
     };
-    list(L"folder", folders); list(L"fav", favs); list(L"recent", recent); list(L"queue", queue);
+    list(L"folder", folders); list(L"fav", favs); list(L"recent", recent); list(L"queue", queue); list(L"collection", collections);
     o += L"\r\n[Displays]\r\n"; for (auto& d : displays) ps(d.first.c_str(), d.second);
     WriteFileAtomic(AppDataDir() + L"\\player.ini", o.data(), o.size() * sizeof(wchar_t));
 }
@@ -256,6 +258,7 @@ bool App::StartClip(int idx, bool hw) {
     if (!ok) { Notify(L"Cannot play clip", err); UpdateOverlayVisibility(); UiInvalidate(); return false; }
     clipIdx = idx; src_ = std::move(s); clipHw_ = src_->HwActive(); src_->Start();
     stagePath_ = show.clips[idx].path; set.last = stagePath_;
+    if (!set.noSave) user.Played(stagePath_);
     auto& rc = set.recent;
     for (size_t i = 0; i < rc.size(); ++i) if (!_wcsicmp(rc[i].c_str(), stagePath_.c_str())) { rc.erase(rc.begin() + i); break; }
     rc.insert(rc.begin(), stagePath_); if (rc.size() > 12) rc.resize(12);
@@ -560,6 +563,42 @@ void App::OnDisplayChange() {
     set.Save();
 }
 
+std::wstring App::CheckLibrary(std::wstring& summary) {
+    struct Item { std::wstring path; uint64_t size; }; std::vector<Item> items; std::string rep = "Divaverse library check\r\n\r\n"; int warn = 0, bad = 0;
+    {
+        std::lock_guard<std::mutex> g(lib.Mutex());
+        for (auto& c : lib.Clips()) { items.push_back({ c.desc.path, c.info.fileSize }); for (auto& w : c.info.warnings) { if (!warn++) rep += "== Metadata warnings ==\r\n"; rep += WToUtf8(c.desc.path) + ": " + w + "\r\n"; } }
+        if (warn) rep += "\r\n";
+        for (auto& p : lib.Problems()) { if (!bad++) rep += "== Files that cannot be played ==\r\n"; rep += WToUtf8(p.path) + ": " + p.what + "\r\n"; }
+        if (bad) rep += "\r\n";
+    }
+    // duplicates: same byte size first (free), then the same hash over the first and last 256 KiB
+    std::sort(items.begin(), items.end(), [](const Item& a, const Item& b) { return a.size < b.size; });
+    auto hash = [](const Item& it) { uint64_t h = 1469598103934665603ull; HANDLE f = CreateFileW(it.path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr); if (f == INVALID_HANDLE_VALUE) return (uint64_t)0;
+        std::vector<uint8_t> b(262144); for (int part = 0; part < 2; ++part) { if (part) { LARGE_INTEGER o; o.QuadPart = it.size > b.size() ? (LONGLONG)(it.size - b.size()) : 0; SetFilePointerEx(f, o, nullptr, FILE_BEGIN); }
+            DWORD got = 0; ReadFile(f, b.data(), (DWORD)b.size(), &got, nullptr); for (DWORD i = 0; i < got; ++i) { h ^= b[i]; h *= 1099511628211ull; } }
+        CloseHandle(f); return h ? h : 1; };
+    int groups = 0, extra = 0; uint64_t waste = 0;
+    for (size_t i = 0; i < items.size();) { size_t j = i; while (j < items.size() && items[j].size == items[i].size) ++j;
+        if (j - i > 1 && items[i].size > 0) { std::vector<std::pair<uint64_t, size_t>> hs; for (size_t k = i; k < j; ++k) hs.emplace_back(hash(items[k]), k); std::sort(hs.begin(), hs.end());
+            for (size_t a = 0; a < hs.size();) { size_t b = a; while (b < hs.size() && hs[b].first == hs[a].first) ++b;
+                if (b - a > 1 && hs[a].first) { if (!groups++) rep += "== Duplicate clips (same content) ==\r\n"; char hd[96]; snprintf(hd, sizeof(hd), "%zu copies, %.1f MB each:\r\n", b - a, items[i].size / 1048576.0); rep += hd;
+                    for (size_t k = a; k < b; ++k) rep += "  " + WToUtf8(items[hs[k].second].path) + "\r\n"; extra += (int)(b - a - 1); waste += items[i].size * (b - a - 1); }
+                a = b; } }
+        i = j; }
+    if (!groups && !warn && !bad) rep += "Nothing to report: no duplicates, no unreadable files, no metadata warnings.\r\n";
+    wchar_t sm[200]; swprintf(sm, 200, L"%d clips checked: %d duplicate copies (%.0f MB), %d unreadable, %d warnings", (int)items.size(), extra, waste / 1048576.0, bad, warn); summary = sm;
+    rep += "\r\n" + WToUtf8(summary) + "\r\nNothing was changed or deleted.\r\n";
+    std::wstring out = LogDir() + L"\\library-check.txt"; WriteFileAtomic(out, rep); Log("library check: %s", WToUtf8(summary).c_str());
+    return out;
+}
+bool App::ExportCollection(const std::wstring& file) { return WriteFileAtomic(file, user.ExportShare(set.favs)); }
+int App::ImportCollection(const std::wstring& file) {
+    std::string txt; if (!ReadFileUtf8(file, txt)) return -1;
+    int n = user.ImportShare(txt, set.favs); if (n > 0) { set.Save(); user.Flush(true); UiInvalidate(); }
+    return n;
+}
+
 App::PerfStats App::Perf() const {
     PerfStats p; p.fps = fpsEst_; p.presentMs = presentMs_; p.gpu = clipHw_; p.frame = shown_;
     if (src_) { VideoSource::DecodeInfo di = src_->Info(); p.decodeMs = di.feedMs; p.dropped = src_->Dropped(); p.unpaired = src_->Unpaired(); p.queued = (int)(di.fed - di.emitted); p.stage = di.stage; }
@@ -741,6 +780,7 @@ void App::Tick() {
 
     double rt0 = NowSeconds(); bool rendered = r_.Render(slot, src_->Dual(), cb); double rt1 = NowSeconds();
     presentMs_ += ((rt1 - rt0) * 1000 - presentMs_) * 0.1;
+    if (newFrame && !set.noSave) user.Watched(stagePath_, 1.0 / std::max(1.0, src_->Fps()));        // time actually shown, frame by frame
     if (newFrame) { if (lastPresentT_ > 0 && rt1 - lastPresentT_ < 1) fpsEst_ += (1.0 / std::max(1e-3, rt1 - lastPresentT_) - fpsEst_) * 0.1; lastPresentT_ = rt1; }
     if (!rendered) {
         Log("device lost -> rebuilding renderer"); events_.push_back("graphics device lost -> rebuilt");
@@ -1056,6 +1096,14 @@ int App::Run(HINSTANCE hi, int argc, wchar_t** argv) {
                 "\nperf hotkey=" + WToUtf8(HotkeyText(s2.hotkeys[HA_PERF])) + "\nhide hotkey=" + WToUtf8(HotkeyText(s2.hotkeys[HA_HIDE])) + "\nlayout key now=" + WToUtf8(LayoutKey()) + "\n";
             WriteFileAtomic(out, r); return ok ? 0 : 3;
         }
+        else if (a == L"--qa-libtools" && i + 2 < argc) {               // QA: scan a folder, run the library check, round-trip a shared collection
+            std::wstring dir = argv[++i], out = argv[++i]; lib.Rescan({ dir }, nullptr, 0); lib.WaitScan(60);
+            std::wstring sum; std::wstring rep = CheckLibrary(sum); CopyFileW(rep.c_str(), (out + L".check.txt").c_str(), FALSE);
+            UserData u1; u1.rating[L"luna"] = 5; u1.rating[L"file:c:\\x\\y.mkv"] = 3; u1.tags[L"luna"] = { L"beach", L"season:winter" }; std::string sh = u1.ExportShare({ L"luna", L"show:c:\\z" });
+            UserData u2; std::vector<std::wstring> fv; int n = u2.ImportShare(sh, fv); bool ok = n == 4 && u2.rating[L"luna"] == 5 && u2.rating.size() == 1 && fv.size() == 1 && sh.find("c:") == std::string::npos && u2.ImportShare("junk", fv) == -1;
+            UserData u3; u3.Played(L"C:\\A.mkv"); u3.Watched(L"c:\\a.MKV", 12.5); ok = ok && u3.Stat(L"c:\\a.mkv").plays == 1 && u3.Stat(L"C:\\a.mkv").seconds == 12.5;
+            WriteFileAtomic(out, std::string(ok ? "PASS " : "FAIL ") + WToUtf8(sum) + "\n" + sh); lib.Stop(); return ok ? 0 : 3;
+        }
         else if (a == L"--qa-library" && i + 2 < argc) { qaLibDir_ = argv[++i]; qaLibSecs_ = _wtof(argv[++i]); }     // QA: scan one folder, watch it, quit after N s
         else if (a == L"--perfhud") qaHud_ = true;
         else if (a == L"--crashtest") { Log("qa: deliberate access violation"); volatile int* p = nullptr; *p = 1; }     // QA: proves the crash report path
@@ -1144,7 +1192,7 @@ int App::Run(HINSTANCE hi, int argc, wchar_t** argv) {
     if (!test) {
         TrayAdd();
         RegisterHotkeys();
-        music.Load(); music.SetVolume(set.musicVolume); music.SetShuffle(set.musicShuffle); music.SetNormalize(set.musicNormalize);
+        music.Load(); music.SetCrossfade(set.musicXfade); music.SetVolume(set.musicVolume); music.SetShuffle(set.musicShuffle); music.SetNormalize(set.musicNormalize);
 
         if (set.music) music.SetEnabled(true);
         SfxConfigure(set.sfx, set.sfxVol);

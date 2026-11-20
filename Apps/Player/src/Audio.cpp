@@ -128,6 +128,7 @@ bool AudioOut::Reopen(const char* why) {
 void AudioOut::ThreadMain() {
     std::wstring err;
     initOk_ = Init(err); initErr_ = err;
+    if (initOk_ && src_) dur_ = src_->Duration();
     SetEvent(ready_);
     if (initOk_) {
         std::vector<float> scratch;
@@ -167,11 +168,21 @@ void AudioOut::ThreadMain() {
                     float want = std::clamp(0.14f / std::max(loud_, 0.01f), 0.35f, 3.2f);                              // aim at about -17 dBFS RMS
                     normGain_ += (want - normGain_) * std::min(1.f, secs / 1.5f); target *= normGain_;
                 }
+                { float goal = fadeGoal_.load(), secs = (float)got / (float)rate_, stepF = secs / fadeTime_.load(); fadeCur_ = goal > fadeCur_ ? std::min(goal, fadeCur_ + stepF) : std::max(goal, fadeCur_ - stepF); target *= fadeCur_; }
                 float g0 = gain_, step = n ? (target - g0) / (float)got : 0;
                 for (uint32_t i = 0; i < got; ++i) { g0 += step; for (int c = 0; c < ch_; ++c) { float x = f[(size_t)i * ch_ + c] * g0; f[(size_t)i * ch_ + c] = std::fabs(x) > 0.8f ? (x > 0 ? 1.f : -1.f) * (0.8f + 0.2f * std::tanh((std::fabs(x) - 0.8f) / 0.2f)) : x; } }
                 gain_ = target;
             }
             meter((const float*)dst, got);
+            {   // spectrum for the visualiser: one Goertzel filter per band over (up to) the first 1024 frames of the block
+                const float* f = (const float*)dst; uint32_t m = std::min<uint32_t>(got, 1024);
+                if (m >= 128) for (int b = 0; b < kBands; ++b) {
+                    float hz = 60.f * std::pow(14000.f / 60.f, b / (float)(kBands - 1)), w = 2 * 3.14159265f * hz / (float)rate_, cw = 2 * std::cos(w), s1 = 0, s2 = 0;
+                    for (uint32_t i = 0; i < m; ++i) { float x = f[(size_t)i * ch_]; if (ch_ > 1) x = (x + f[(size_t)i * ch_ + 1]) * 0.5f; float s0 = x + cw * s1 - s2; s2 = s1; s1 = s0; }
+                    float mag = std::sqrt(std::max(0.f, s1 * s1 + s2 * s2 - cw * s1 * s2)) / (m * 0.5f), v = std::clamp(std::sqrt(mag) * (1.6f + b * 0.16f), 0.f, 1.f);       // sqrt: perceptual; tilt lifts the quiet top end
+                    bands_[b] = std::max(v, bands_[b].load() * 0.80f);
+                }
+            }
             d->render->ReleaseBuffer(avail, 0);
             frames_ += got;
         }
@@ -189,6 +200,9 @@ namespace {
 struct FileSource : AudioSource {
     std::wstring path; ComPtr<IMFSourceReader> reader; int ch = 2;
     std::vector<float> fifo; size_t fifoAt = 0; bool ended = false;
+    double Duration() override { PROPVARIANT v; PropVariantInit(&v); double s = 0;
+        if (reader && SUCCEEDED(reader->GetPresentationAttribute((DWORD)MF_SOURCE_READER_MEDIASOURCE, MF_PD_DURATION, &v)) && v.vt == VT_UI8) s = (double)v.uhVal.QuadPart / 1e7;
+        PropVariantClear(&v); return s; }
     bool Prepare(int rate, int channels, std::wstring& err) override {
         ch = channels;
         HRESULT hr = MFCreateSourceReaderFromURL(path.c_str(), nullptr, &reader);

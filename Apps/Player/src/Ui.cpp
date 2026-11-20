@@ -17,6 +17,7 @@
 #include <cmath>
 #include <cwctype>
 #include <algorithm>
+#include <ctime>
 
 namespace {
 constexpr wchar_t kUiClass[] = L"Divaverse.Main";
@@ -156,6 +157,11 @@ std::vector<std::wstring> PickFiles(const wchar_t* filter) {
     std::vector<std::wstring> parts; for (const wchar_t* q = file.data(); *q; q += wcslen(q) + 1) parts.emplace_back(q);
     if (parts.size() == 1) paths = parts; else for (size_t i = 1; i < parts.size(); ++i) paths.push_back(JoinPath(parts[0], parts[i]));
     return paths;
+}
+std::wstring PickSave(const wchar_t* filter, const wchar_t* ext, const wchar_t* name) {
+    wchar_t file[MAX_PATH * 2]; wcsncpy(file, name, MAX_PATH); OPENFILENAMEW of{ sizeof(of) }; of.hwndOwner = U.h; of.lpstrFile = file; of.nMaxFile = MAX_PATH * 2; of.lpstrFilter = filter; of.lpstrDefExt = ext;
+    of.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR | OFN_EXPLORER;
+    return GetSaveFileNameW(&of) ? std::wstring(file) : std::wstring();
 }
 void CopyText(const std::wstring& s) {
     if (!OpenClipboard(U.h)) return;
@@ -358,6 +364,42 @@ void DivaCard(int d, const RectF& slot, bool large, bool onStage) {
     if (lean) C().ResetTransform();
 }
 
+// Library search. Plain words match names, clip titles and tags (fuzzy). These words are conditions instead:
+//   fav   unseen   season            favourites / has clips not yet presented as new / tagged for the current season
+//   tag:beach                        has that tag (prefix match)
+//   rating>=4  rating:5              stars (the user's, else the authored rating)
+//   plays>=3   plays:0               times her clips were put on stage
+//   stale:30                         not played in the last 30 days (never played counts)
+// A search can be saved as a collection chip under the toolbar.
+const wchar_t* SeasonNow() { SYSTEMTIME st; GetLocalTime(&st); int m = st.wMonth; return m == 12 || m <= 2 ? L"winter" : m <= 5 ? L"spring" : m <= 8 ? L"summer" : L"autumn"; }
+struct DivaStat { int plays = 0; double seconds = 0; uint64_t last = 0; };
+DivaStat StatOf(const LibDiva& dv) { DivaStat s; auto& clips = g_app->lib.Clips(); for (int c : dv.clips) { auto p = g_app->user.Stat(clips[c].desc.path); s.plays += p.plays; s.seconds += p.seconds; s.last = std::max(s.last, p.last); } return s; }
+bool MatchQuery(const LibDiva& dv, const std::wstring& qLower) {
+    App& A = *g_app; auto& clips = A.lib.Clips(); std::wstring words; const std::vector<std::wstring>* tags = nullptr;
+    { auto it = A.user.tags.find(dv.key); if (it != A.user.tags.end()) tags = &it->second; }
+    auto hasTag = [&](const std::wstring& t) { if (tags) for (auto& x : *tags) if (Lower(x).rfind(t, 0) == 0) return true; return false; };
+    size_t p = 0;
+    while (p < qLower.size()) {
+        size_t e = qLower.find(L' ', p); if (e == std::wstring::npos) e = qLower.size();
+        std::wstring t = qLower.substr(p, e - p); p = e + 1; if (t.empty()) continue;
+        auto num = [&](const wchar_t* key, int& out, bool& ge) { size_t n = wcslen(key); if (t.rfind(key, 0) != 0 || t.size() <= n) return false; ge = t[n] == L'>';
+            if (t[n] != L':' && t[n] != L'=' && !ge) return false; size_t q = n + 1; if (ge && q < t.size() && t[q] == L'=') ++q; if (q >= t.size() || !iswdigit(t[q])) return false; out = _wtoi(t.c_str() + q); return true; };
+        int v; bool ge;
+        if (t == L"fav") { if (!A.IsFav(dv.key)) return false; }
+        else if (t == L"unseen") { bool any = false; for (int c : dv.clips) any = any || !A.user.seen.count(dv.key + L"|" + clips[c].desc.id); if (!any) return false; }
+        else if (t == L"season") { if (!hasTag(std::wstring(L"season:") + SeasonNow()) && !hasTag(SeasonNow())) return false; }
+        else if (t.rfind(L"tag:", 0) == 0 && t.size() > 4) { if (!hasTag(t.substr(4))) return false; }
+        else if (num(L"rating", v, ge)) { int r = A.user.Rating(dv.key, dv.rating); if (ge ? r < v : r != v) return false; }
+        else if (num(L"plays", v, ge)) { int n = StatOf(dv).plays; if (ge ? n < v : n != v) return false; }
+        else if (num(L"stale", v, ge)) { uint64_t last = StatOf(dv).last; if (last && (uint64_t)time(nullptr) - last < (uint64_t)v * 86400) return false; }
+        else words += (words.empty() ? L"" : L" ") + t;
+    }
+    if (words.empty()) return true;
+    std::wstring hay = dv.name; for (int c : dv.clips) hay += L" " + clips[c].title + L" " + Utf8ToW(clips[c].info.meta.showTitle);
+    if (tags) for (auto& x : *tags) hay += L" " + x;
+    return Fuzzy(hay, words);
+}
+
 float PageLibrary(const RectF& a) {
     App& A = *g_app; auto& divas = A.lib.Divas(); auto& clips = A.lib.Clips();
     float y = PageHeader(a, L"Divas", divas.empty() ? L"Your performers live here" : Fmt(L"%d %ls, %d %ls", (int)divas.size(), divas.size() == 1 ? L"diva" : L"divas", (int)clips.size(), clips.size() == 1 ? L"clip" : L"clips"), 420);
@@ -366,9 +408,9 @@ float PageLibrary(const RectF& a) {
     SearchBox(RF(a.right - 420, a.top + 4, 232, 36));
     // toolbar: filter, card form, zoom
     y -= 18;
-    Segmented(130, RF(a.left, y, 300, 34), { L"All", L"Favourites", L"Recent" }, U.filter, [](int k) { U.filter = k; U.scroll[PG_LIBRARY] = 0; UiInvalidate(); });
-    C().Text(L"Sort", RF(a.left + 316, y, 40, 34), 12, P().faint);
-    Segmented(131, RF(a.left + 356, y, 250, 34), { L"Name", L"Newest", L"Rating" }, U.sort, [](int k) { U.sort = k; UiInvalidate(); });
+    Segmented(130, RF(a.left, y, 250, 34), { L"All", L"Favourites", L"Recent" }, U.filter, [](int k) { U.filter = k; U.scroll[PG_LIBRARY] = 0; UiInvalidate(); });
+    C().Text(L"Sort", RF(a.left + 260, y, 34, 34), 12, P().faint);
+    Segmented(131, RF(a.left + 294, y, 320, 34), { L"Name", L"Newest", L"Rating", L"Watched" }, U.sort, [](int k) { U.sort = k; UiInvalidate(); });
     float rx = a.right;
     Slider(140, RF(rx - 130, y, 130, 34), (A.set.zoom - 0.6f) / 1.2f, [](float v) { g_app->set.zoom = 0.6f + v * 1.2f; UiInvalidate(); }, [] { g_app->set.Save(); });
     C().IconAt(I_SEARCH, rx - 150, y + 17, 14, P().dim, 1.5f);
@@ -378,7 +420,23 @@ float PageLibrary(const RectF& a) {
         C().IconAt(m == 0 ? I_TILES : I_CARDS, b.left + 17, b.top + 17, 15, cur ? P().accent : P().dim, 1.4f);
         AddHit(b, id, [m] { g_app->set.cardMode = m; g_app->set.Save(); UiInvalidate(); });
     }
-    y += 54;
+    y += 46;
+    {   // collections: built-in searches, then the user's saved ones; a click puts the query in the search box
+        static const wchar_t* preset[][2] = { { L"Unseen", L"unseen" }, { L"Top rated", L"rating>=4" }, { L"Not lately", L"stale:30" }, { L"Never played", L"plays:0" }, { L"In season", L"season" } };
+        auto& saved = A.set.collections; float cx = a.left; std::wstring cur = Lower(U.search);
+        auto chip = [&](int id, const std::wstring& label, const std::wstring& query, int del) {
+            float tw = C().TextW(label, 12, true) + 26 + (del >= 0 ? 22 : 0); if (cx + tw > a.right - 140) return; RectF r = RF(cx, y, tw, 28); bool on = cur == Lower(query);
+            C().FillRR(r, 14, on ? Alpha(P().accent, 0.24f) : Mix(P().card, P().text, Hot(id) ? 0.14f : 0.07f)); if (on) C().StrokeRR(r, 14, P().accent, 1.2f);
+            C().Text(label, RF(r.left + 13, r.top, tw - 26, 28), 12, on ? P().accent : P().text, 0, true);
+            AddHit(RF(r.left, r.top, tw - (del >= 0 ? 24 : 0), 28), id, [query, on] { U.search = on ? L"" : query; U.searchFocus = false; U.scroll[PG_LIBRARY] = 0; UiInvalidate(); });
+            if (del >= 0) Button(id + 1, RF(r.right - 25, r.top + 3, 22, 22), L"", I_CLOSE, B_GHOST, [del] { auto& v = g_app->set.collections; if (del < (int)v.size()) { v.erase(v.begin() + del); g_app->set.Save(); UiInvalidate(); } });
+            cx += tw + 7; };
+        for (int i = 0; i < 5; ++i) chip(7600 + i * 2, preset[i][0], preset[i][1], -1);
+        for (size_t i = 0; i < saved.size(); ++i) chip(7620 + (int)i * 2, saved[i], saved[i], (int)i);
+        bool canSave = !U.search.empty() && saved.size() < 24 && std::find(saved.begin(), saved.end(), U.search) == saved.end(); for (int i = 0; i < 5; ++i) canSave = canSave && cur != preset[i][1];
+        if (canSave) Button(7690, RF(a.right - 130, y - 3, 130, 32), L"Save search", I_ADD, B_GHOST, [] { g_app->set.collections.push_back(U.search); g_app->set.Save(); UiToast(L"Saved as a collection"); UiInvalidate(); });
+        y += 42;
+    }
     if (divas.empty()) {
         EmptyState(a, y + 10, I_SPARKLE, L"No divas yet", L"Drop clips or a folder onto this window, or put them in the Divas folder next to Divaverse.");
         y += 280;
@@ -388,9 +446,7 @@ float PageLibrary(const RectF& a) {
         for (int d = 0; d < (int)divas.size(); ++d) {
             if (U.filter == 1 && !A.IsFav(divas[d].key)) continue;
             if (U.filter == 2) { bool played = false; for (int c : divas[d].clips) for (auto& rp : A.set.recent) played = played || !_wcsicmp(clips[c].desc.path.c_str(), rp.c_str()); if (!played) continue; }
-            if (!q.empty()) { std::wstring hay = divas[d].name; for (int c : divas[d].clips) hay += L" " + clips[c].title + L" " + Utf8ToW(clips[c].info.meta.showTitle);
-                auto tg = A.user.tags.find(divas[d].key); if (tg != A.user.tags.end()) for (auto& t : tg->second) hay += L" " + t;
-                if (!Fuzzy(hay, q)) continue; }
+            if (!q.empty() && !MatchQuery(divas[d], q)) continue;
             order.push_back(d);
         }
         if (U.filter == 2) {      // most recently played first, then most recently added
@@ -398,6 +454,7 @@ float PageLibrary(const RectF& a) {
             std::stable_sort(order.begin(), order.end(), [&](int x, int z) { int rxk = rank(x), rz = rank(z); return rxk != rz ? rxk < rz : divas[x].added > divas[z].added; });
         } else if (U.sort == 1) std::stable_sort(order.begin(), order.end(), [&](int x, int z) { return divas[x].added > divas[z].added; });
         else if (U.sort == 2) std::stable_sort(order.begin(), order.end(), [&](int x, int z) { return A.user.Rating(divas[x].key, divas[x].rating) > A.user.Rating(divas[z].key, divas[z].rating); });
+        else if (U.sort == 3) { std::vector<double> sec(divas.size()); for (int d : order) sec[d] = StatOf(divas[d]).seconds; std::stable_sort(order.begin(), order.end(), [&](int x, int z) { return sec[x] > sec[z]; }); }
         else std::stable_sort(order.begin(), order.end(), [&](int x, int z) { return _wcsicmp(divas[x].name.c_str(), divas[z].name.c_str()) < 0; });
         if (order.empty()) {
             C().Text(U.filter == 1 ? L"No favourites yet. Hover a card and press the heart." : U.filter == 2 && q.empty() ? L"Nothing played yet." : L"Nothing matches.", RF(a.left, y + 30, RW(a), 30), 14, P().dim, 1);
@@ -753,6 +810,10 @@ float PageMusic(const RectF& a) {
     auto& tr = M.Tracks(); int cur = M.CurrentFile(); ID2D1Bitmap* art = cur >= 0 && cur < (int)tr.size() ? SongCover(tr[cur].path, budget) : nullptr;
     if (art) C().BitmapCover(art, RF(np.left + 12, np.top + 10, 56, 56), 10); else Equalizer(RF(np.left + 20, np.top + 16, 52, 44), 7, lvl, M.Enabled() && !A.MusicPaused());
     if (art) Equalizer(RF(np.left + 18, np.top + 44, 44, 18), 6, lvl, M.Enabled() && !A.MusicPaused());
+    if (M.Enabled() && !A.MusicPaused()) {              // spectrum of what is playing, behind the title (measured on the output thread)
+        const int nb = AudioOut::kBands; float sw = std::min(260.f, RW(np) - 620), bw = sw / nb, sx = np.right - 372 - sw;
+        if (sw > 90) for (int i = 0; i < nb; ++i) { float v = Anim(7700 + i, M.Band(i), 26.f), bh = std::max(2.f, v * 52); C().GradRR(RF(sx + i * bw, np.top + 64 - bh, bw - 3, bh), 2, Hex(kPink, 0.75f), Alpha(P().accent, 0.5f), true); }
+    }
     C().Text(!M.Enabled() ? L"Music is off" : A.MusicPaused() ? M.NowPlaying() + L"  (paused)" : M.NowPlaying(), RF(np.left + 84, np.top + 14, RW(np) - 480, 24), 15, P().text, 0, true);
     C().Text(!M.LastError().empty() ? M.LastError() : M.Mode() == 0 ? L"Procedural station, never repeats. Media keys work here." : L"From: " + M.ScopeName() + (M.Shuffle() ? L"  (weighted shuffle)" : L""), RF(np.left + 84, np.top + 40, RW(np) - 480, 20), 12, M.LastError().empty() ? P().dim : P().danger);
     C().IconAt(I_MUSIC, np.right - 358, np.top + 38, 15, P().dim);
@@ -765,6 +826,8 @@ float PageMusic(const RectF& a) {
     if (U.musicTab > 0) {
         C().Text(L"Shuffle", RF(a.right - 130, y, 70, 38), 13, P().dim, 2);
         Toggle(451, a.right, y + 19, M.Shuffle(), [] { g_app->set.musicShuffle = !g_app->music.Shuffle(); g_app->music.SetShuffle(g_app->set.musicShuffle); g_app->set.Save(); UiInvalidate(); });
+        C().Text(L"Crossfade", RF(a.right - 560, y, 90, 38), 13, P().dim, 2);
+        Button(456, RF(a.right - 460, y + 3, 100, 32), M.Crossfade() > 0 ? Fmt(L"%.0f s", M.Crossfade()) : std::wstring(L"Off"), -1, B_SOFT, [] { float v = g_app->music.Crossfade(); v = v >= 8 ? 0 : v + 2; g_app->music.SetCrossfade(v); g_app->set.musicXfade = v; g_app->set.Save(); UiInvalidate(); });
         C().Text(L"Even loudness", RF(a.right - 310, y, 116, 38), 13, P().dim, 2);
         Toggle(452, a.right - 140, y + 19, M.Normalize(), [] { g_app->set.musicNormalize = !g_app->music.Normalize(); g_app->music.SetNormalize(g_app->set.musicNormalize); g_app->set.Save(); UiInvalidate(); });
     }
@@ -790,7 +853,10 @@ float PageMusic(const RectF& a) {
     Button(453, RF(a.left + 160, y, 124, 36), L"Add files", I_ADD, B_GHOST, [] {
         auto p = PickFiles(L"Audio (*.mp3;*.m4a;*.aac;*.wav;*.flac;*.wma;*.ogg;*.opus)\0*.mp3;*.m4a;*.aac;*.wav;*.flac;*.wma;*.ogg;*.opus\0All files\0*.*\0");
         if (g_app->music.AddFiles(p)) UiInvalidate(); });
-    C().Text(Fmt(L"%d songs, %d albums", (int)tr.size(), (int)M.Albums().size()), RF(a.left + 296, y, 240, 36), 12.5f, P().faint);
+    Button(457, RF(a.left + 294, y, 190, 36), L"Add stream (paste URL)", I_ADD, B_GHOST, [] {       // internet radio: the address is taken from the clipboard
+        std::wstring url; if (OpenClipboard(U.h)) { if (HANDLE hd = GetClipboardData(CF_UNICODETEXT)) { if (auto* p = (const wchar_t*)GlobalLock(hd)) { url = p; GlobalUnlock(hd); } } CloseClipboard(); }
+        if (g_app->music.AddStream(url)) { UiToast(L"Stream added to My files"); UiInvalidate(); } else UiToast(L"Copy the stream address (http:// or https://) first, then press this"); });
+    C().Text(Fmt(L"%d songs, %d albums", (int)tr.size(), (int)M.Albums().size()), RF(a.left + 496, y, 240, 36), 12.5f, P().faint);
     y += 52;
     if (tr.empty()) { C().Text(L"Nothing here yet. Add a folder: every sub-folder is searched, and albums are rebuilt from the files' own tags.", RF(a.left, y, RW(a), 40), 13, P().dim, 0, false, false, true); return y + 60; }
     if (U.musicTab == 1) {                              // albums
@@ -910,6 +976,17 @@ float PageSettings(const RectF& a) {
       Row(card, yy, I_ADD, L"Add a folder", L"", false);
       Button(529, RF(card.right - 126, yy - 44, 110, 36), L"Browse", I_FOLDER, B_SOFT, [] { std::wstring d = PickFolder(); if (!d.empty()) g_app->AddLibraryFolder(d); });
       y = yy + 26; }
+    SectionTitle(a.left, y, L"LIBRARY TOOLS");
+    { RectF card = RF(a.left, y, RW(a), 62 * 3); Card(card); float yy = y;
+      Row(card, yy, I_SEARCH, L"Check the library", L"Finds duplicate clips, files that cannot be played and metadata warnings. Writes a report; changes nothing.");
+      Button(550, RF(card.right - 126, yy - 49, 110, 36), L"Check", I_SEARCH, B_SOFT, [] { std::wstring sum, f = g_app->CheckLibrary(sum); UiToast(sum); ShellExecuteW(nullptr, L"open", f.c_str(), nullptr, nullptr, SW_SHOWNORMAL); });
+      Row(card, yy, I_COPY, L"Export my ratings, tags and favourites", L"One small file a friend can import. Diva ids only: no media, no file paths, no play history.");
+      Button(551, RF(card.right - 126, yy - 49, 110, 36), L"Export", I_COPY, B_GHOST, [] { std::wstring f = PickSave(L"Divaverse collection (*.dvcollection)\0*.dvcollection\0", L"dvcollection", L"my-divas"); if (f.empty()) return;
+          UiToast(g_app->ExportCollection(f) ? L"Collection exported" : L"Could not write that file"); });
+      Row(card, yy, I_ADD, L"Import a collection", L"Adds ratings for divas you have not rated, and any new tags and favourites. Yours are never overwritten.", false);
+      Button(552, RF(card.right - 126, yy - 49, 110, 36), L"Import", I_ADD, B_GHOST, [] { auto p = PickFiles(L"Divaverse collection (*.dvcollection)\0*.dvcollection\0All files\0*.*\0"); if (p.empty()) return;
+          int n = g_app->ImportCollection(p[0]); UiToast(n < 0 ? std::wstring(L"That is not a Divaverse collection file") : Fmt(L"%d ratings, tags and favourites added", n)); });
+      y += 62 * 3 + 26; }
     SectionTitle(a.left, y, L"SHORTCUTS");
     { const int n = HA_COUNT + 1; RectF card = RF(a.left, y, RW(a), 44.f * n + 56); Card(card);
       for (int i = 0; i < n; ++i) {
@@ -1347,6 +1424,8 @@ bool UiScreenshot(const std::wstring& path, int page) {
     if (page == 20) { U.page = PG_LIBRARY; std::lock_guard<std::mutex> g(g_app->lib.Mutex()); if (!g_app->lib.Divas().empty()) U.detailKey = g_app->lib.Divas()[0].key; }
     if (page == 21) { U.page = PG_LIBRARY; g_app->set.cardMode = 0; }
     if (page == 22) { U.page = PG_STAGE; U.infoOpen = true; }
+    if (page == 25) { U.page = PG_LIBRARY; U.search = L"stale:30 plays:0 luna"; if (const wchar_t* e = _wgetenv(L"DIVAVERSE_QA_SEARCH")) U.search = e; }
+    if (page == 26) { U.page = PG_SETTINGS; U.scroll[ScrollSlot()] = 760.f; }
     if (page == 23 || page == 24) { U.page = PG_SETTINGS; U.scroll[ScrollSlot()] = page == 23 ? 1180.f : 99999.f; if (page == 24) U.hkCapture = HA_PERF; }     // settings: shortcuts + schedule, diagnostics
     if (page == 30 || page == 31) { U.page = PG_LIBRARY; U.loot.clear(); std::lock_guard<std::mutex> g(g_app->lib.Mutex()); if (!g_app->lib.Divas().empty()) { auto& dv = g_app->lib.Divas()[0]; U.loot.push_back({ dv.key, dv.name, (int)dv.clips.size(), true }); U.lootGen = g_app->lib.Generation(); U.lootT = NowSeconds() - (page == 31 ? 2.0 : 0.6); U.lootBurst = true; } }
     for (int i = 0; i < 12; ++i) { RedrawWindow(U.h, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW); Sleep(20); }

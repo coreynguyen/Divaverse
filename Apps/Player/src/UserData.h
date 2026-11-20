@@ -11,6 +11,13 @@ struct UserData {
     std::unordered_map<std::wstring, std::vector<std::wstring>> tags;   // diva key -> tags
     std::unordered_set<std::wstring> seen;                              // "divaKey|clipId" already presented as new
     std::unordered_map<std::wstring, float> weight;                     // clip path (lower case) -> shuffle weight 0.15..2.5
+    struct PlayStat { int plays = 0; double seconds = 0; uint64_t last = 0; };      // last: unix time of the latest play
+    std::unordered_map<std::wstring, PlayStat> stat;                    // clip path (lower case) -> how much it has been watched
+    void Played(const std::wstring& clipPath); void Watched(const std::wstring& clipPath, double seconds);
+    PlayStat Stat(const std::wstring& clipPath) const;
+    // Ratings and tags by diva id only (no file paths, no play history): a file a friend can import.
+    std::string ExportShare(const std::vector<std::wstring>& favs) const;
+    int ImportShare(const std::string& text, std::vector<std::wstring>& favs);   // number of entries taken, -1 = not a collection file
     bool dirty = false; double lastFlush = 0;
     void Load(); void Save(); void Flush(bool force = false);
     float Weight(const std::wstring& clipPath) const;

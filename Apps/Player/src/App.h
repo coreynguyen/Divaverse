@@ -40,6 +40,8 @@ struct Settings {
     bool hwBad = false, dcompBad = false;  // learned by the playback watchdog on this machine
     std::wstring last; std::vector<std::wstring> folders;
     uint32_t hotkeys[HA_COUNT] = {};
+    float musicXfade = 0;                  // seconds of overlap between songs (own files), 0 = off
+    std::vector<std::wstring> collections; // saved library searches (query text, see the search syntax in Ui.cpp)
     bool perfHud = false;                  // playback statistics beside the performer
     uint64_t crashSeen = 0;                // newest crash report already announced
     int schedFrom = -1, schedTo = -1;      // on stage only between these hours (local time, -1 = always)
@@ -111,6 +113,9 @@ public:
     void DeleteClipPlaylist(const std::wstring& name);
     struct PerfStats { double fps = 0, decodeMs = 0, presentMs = 0; uint64_t dropped = 0, unpaired = 0; int queued = 0; bool gpu = false; const char* stage = ""; int64_t frame = 0; };
     PerfStats Perf() const;
+    // Library tools: duplicates (same size and same content sample), unreadable files, metadata warnings -> text report. Returns its path.
+    std::wstring CheckLibrary(std::wstring& summary);
+    bool ExportCollection(const std::wstring& file); int ImportCollection(const std::wstring& file);
 
 private:
     static LRESULT CALLBACK WndProcThunk(HWND h, UINT m, WPARAM w, LPARAM l);

@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.14.0 (library and music)
+- Play statistics per clip (times staged, seconds actually shown, last played), kept in userdata.txt.
+- Library search conditions: fav, unseen, season, tag:x, rating>=n / rating:n, plays>=n / plays:n, stale:days;
+  plain words still match names, titles and tags. Sort by Watched.
+- Collections: preset chips (Unseen, Top rated, Not lately, Never played, In season) and "Save search" for your own.
+  "In season" matches the tag season:winter / spring / summer / autumn for the current month.
+- Settings > Library tools: Check the library (duplicate clips by size + content sample, unreadable files, metadata
+  warnings; writes a report, changes nothing); export / import of ratings, tags and favourites as a
+  .dvcollection file keyed by diva id (no paths, no media, no history; imports never overwrite your own ratings).
+- Music: 16-band spectrum of the real output beside the title; crossfade between your own songs (Off, 2-8 s);
+  internet radio streams added from a copied http(s) address.
+
 ## 0.13.0 (Player: robustness, diagnostics, library, shortcuts)
 - Windows CI: GitHub Actions builds `Divaverse.sln` with MSVC, checks the exe imports only system DLLs, and runs
   playback smoke tests on a Windows runner. Results appear as annotations on the run.
