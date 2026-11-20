@@ -921,7 +921,7 @@ void SideDraw(SRider& r, float sx, float base, float S, float rot, bool sim) {
                 for (int i = 0; i <= cutN; ++i) pg[np++] = { rs[0][i].x, rs[0][i].y }; for (int i = cutN; i >= 0; --i) pg[np++] = { rs[NS - 1][i].x, rs[NS - 1][i].y }; C().Poly(pg, np, body); }
             const float Lx = 0.53f * r.face, Ly = -0.85f;                                           // light direction in the sprite's (possibly mirrored) frame
             for (int s = 0; s < NS; ++s) { float sh = (Hash(s * 11 + 2) - 0.5f) * 0.30f, depth = 0.55f + 0.45f * Hash(s * 3 + 7); Color base = Mix(hd, hc, depth);
-                for (int i = 1; i <= len[s]; ++i) { float t = i / (float)(hs.nodes - 1), tl = i / (float)len[s], w = hs.width * 1.45f * (1 - tl * 0.75f) * (1 + 0.35f * wetD);
+                for (int i = 1; i <= len[s]; ++i) { float tl = i / (float)len[s], w = hs.width * 1.45f * (1 - tl * 0.75f) * (1 + 0.35f * wetD);
                     float dx = rs[s][i].x - rs[s][i - 1].x, dy = rs[s][i].y - rs[s][i - 1].y, l = std::sqrt(dx * dx + dy * dy) + 1e-4f, c = (dx * Lx + dy * Ly) / l;                 // strand tangent against the light:
                     float diff = std::sqrt(std::max(0.f, 1 - c * c)), c1 = c + sh, s1 = std::pow(std::max(0.f, 1 - c1 * c1), 46.f), c2 = c - 0.38f + sh * 2, s2 = std::pow(std::max(0.f, 1 - c2 * c2), 12.f);   // a tight white lobe and a broad coloured one, shifted per strand
                     Color col = Mix(Mix(Mix(hd, base, 0.35f + 0.65f * diff), hl, s2 * 0.45f), Hex(0xFFFFFF), s1 * (0.55f + 0.35f * wetD) * depth);

@@ -528,7 +528,7 @@ void App::PollFullscreen(double now) {
 }
 
 // Time window and idle behaviour (Settings -> Schedule), polled once a second.
-void App::PollSchedule(double now) {
+void App::PollSchedule(double) {
     SYSTEMTIME st; GetLocalTime(&st); int h = st.wHour, a = set.schedFrom, b = set.schedTo;
     bool out = a >= 0 && b >= 0 && a != b && !(a < b ? (h >= a && h < b) : (h >= a || h < b));
     if (out != schedHidden_) { schedHidden_ = out; Log("schedule: %s (window %02d:00-%02d:00)", out ? "outside the window -> off stage" : "inside the window -> on stage", a, b); UpdateOverlayVisibility(); UpdateSuspend(); TrayUpdate(); }

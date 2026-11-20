@@ -55,7 +55,8 @@ jobs:
           $fail = 0
           function T($name, [string[]]$a) {
             $out = "$pwd\st_$name.bmp"
-            $p = Start-Process -FilePath $env:EXE -ArgumentList (@('--selftest', "`"$out`"", '--selftest-seconds', '6') + $a) -PassThru -Wait -NoNewWindow
+            $secs = if ($a -contains 'loops=1') { '12' } else { '6' }          # the reference clip wraps after about 9 s
+            $p = Start-Process -FilePath $env:EXE -ArgumentList (@('--selftest', "`"$out`"", '--selftest-seconds', $secs) + $a) -PassThru -Wait -NoNewWindow
             $j = if (Test-Path "$out.json") { (Get-Content "$out.json" -Raw) -replace "`r?`n", ' ' } else { 'no report' }
             if ($p.ExitCode -eq 0) { Write-Output "::notice::PASS $name $j" } else { Write-Output "::error::FAIL $name (rc=$($p.ExitCode)) $j"; $script:fail = 1 }
           }
